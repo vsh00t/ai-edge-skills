@@ -1,16 +1,5 @@
----
-name: social-monitor
-description: "Social media threat and sentiment monitor. Analyzes text snippets from social media for threats, sentiment, disinformation indicators, and key narrative tracking."
-version: 1.0.0
-author: AI Edge Gallery
-tags:
-  - social-media
-  - sentiment
-  - threat
-  - disinformation
-  - monitoring
----
-
+name	social-monitor
+description	Social media threat and sentiment monitor. Analyzes text snippets from social media for threats, sentiment, disinformation indicators, and key narrative tracking.
 # Social Monitor Skill
 
 ## Overview

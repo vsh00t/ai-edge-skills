@@ -1,15 +1,5 @@
----
-name: report-generator
-description: "Generate professional cybersecurity pentest and audit reports. Structures findings with severity ratings, observations, and recommendations in HTML format."
-version: 1.0.0
-author: AI Edge Gallery
-tags:
-  - cybersecurity
-  - pentest
-  - report
-  - audit
----
-
+name	report-generator
+description	Generate professional cybersecurity pentest and audit reports. Structures findings with severity ratings, observations, and recommendations in HTML format.
 # Report Generator Skill
 
 ## Overview

@@ -1,16 +1,5 @@
----
-name: domain-recon
-description: "Passive domain reconnaissance for pentest planning. Queries DNS records, certificate transparency logs, and identifies subdomains and attack surface."
-version: 1.0.0
-author: AI Edge Gallery
-tags:
-  - recon
-  - dns
-  - certificates
-  - subdomains
-  - pentest
----
-
+name	domain-recon
+description	Passive domain reconnaissance for pentest planning. Queries DNS records, certificate transparency logs, and identifies subdomains and attack surface.
 # Domain Reconnaissance Skill
 
 ## Overview

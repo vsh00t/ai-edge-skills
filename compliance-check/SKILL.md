@@ -1,16 +1,5 @@
----
-name: compliance-check
-description: "Interactive cybersecurity compliance checker for ISO 27001, PCI-DSS, and LATAM data protection regulations (Ecuador, Colombia). Generates gap analysis reports."
-version: 1.0.0
-author: AI Edge Gallery
-tags:
-  - compliance
-  - iso27001
-  - pci-dss
-  - data-protection
-  - gap-analysis
----
-
+name	compliance-check
+description	Interactive cybersecurity compliance checker for ISO 27001, PCI-DSS, and LATAM data protection regulations (Ecuador, Colombia). Generates gap analysis reports.
 # Compliance Check Skill
 
 ## Overview

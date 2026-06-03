@@ -1,15 +1,5 @@
----
-name: password-breach-checker
-description: "Check if passwords or emails have been exposed in known data breaches. Analyzes password strength and checks against HIBP API."
-version: 1.0.0
-author: AI Edge Gallery
-tags:
-  - security
-  - password
-  - breach
-  - hibp
----
-
+name	password-breach-checker
+description	Check if passwords or emails have been exposed in known data breaches. Analyzes password strength and checks against HIBP API.
 # Password Breach Checker
 
 Analyzes password strength using zxcvbn.js and checks against the Have I Been Pwned (HIBP) API using the k-anonymity model for privacy-preserving breach lookups.
