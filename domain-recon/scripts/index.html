@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Domain Recon</title></head><body>
+<script>
+window['ai_edge_gallery_get_result'] = async (data) => {
+  try {
+    const input = JSON.parse(data);
+    const domain = input.domain || input.target || input.query || '';
+    
+    if (!domain || domain.length < 3) {
+      return JSON.stringify({ error: 'Please provide a domain name (e.g., example.com)' });
+    }
+    
+    const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+    const results = { domain: cleanDomain, dns: {}, subdomains: [], certLogs: [] };
+    
+    // DNS over HTTPS via Cloudflare
+    const recordTypes = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'SOA', 'CNAME'];
+    const dnsPromises = recordTypes.map(async (type) => {
+      try {
+        const resp = await fetch(`https://cloudflare-dns.com/dns-query?name=${cleanDomain}&type=${type}`, {
+          headers: { 'Accept': 'application/dns-json' }
+        });
+        const json = await resp.json();
+        if (json.Answer && json.Answer.length > 0) {
+          results.dns[type] = json.Answer.map(a => a.data);
+        }
+      } catch (e) { /* skip failed */ }
+    });
+    
+    // Certificate Transparency via crt.sh
+    let certSubdomains = new Set();
+    try {
+      const resp = await fetch(`https://crt.sh/?q=%25.${cleanDomain}&output=json`, {
+        signal: AbortSignal.timeout(10000)
+      });
+      const certs = await resp.json();
+      results.certLogs = certs.slice(0, 50).map(c => ({
+        issuer: c.issuer_name,
+        not_before: c.not_before,
+        not_after: c.not_after,
+        name: c.name_value
+      }));
+      certs.forEach(c => {
+        c.name_value.split('\n').forEach(name => {
+          const cleaned = name.replace(/^\*\./, '').toLowerCase().trim();
+          if (cleaned.endsWith(cleanDomain) && cleaned !== cleanDomain) {
+            certSubdomains.add(cleaned);
+          }
+        });
+      });
+    } catch (e) { /* crt.sh may timeout */ }
+    
+    await Promise.all(dnsPromises);
+    results.subdomains = [...certSubdomains].sort();
+    
+    // Analyze TXT records for tech hints
+    const techHints = [];
+    if (results.dns.TXT) {
+      results.dns.TXT.forEach(txt => {
+        if (txt.includes('google-site-verification')) techHints.push('Google Workspace/Cloud');
+        if (txt.includes('v=spf1')) techHints.push('SPF configured');
+        if (txt.includes('azure')) techHints.push('Microsoft Azure');
+        if (txt.includes('amazon')) techHints.push('AWS');
+        if (txt.includes('cloudflare')) techHints.push('Cloudflare (CDN/WAF)');
+        if (txt.includes('mailgun')) techHints.push('Mailgun');
+        if (txt.includes('sendgrid')) techHints.push('SendGrid');
+        if (txt.includes('MS=ms')) techHints.push('Microsoft 365');
+        if (txt.includes('apple')) techHints.push('Apple Services');
+        if (txt.includes('hubspot')) techHints.push('HubSpot');
+      });
+    }
+    
+    // Format output
+    let output = `🔍 DOMAIN RECONNAISSANCE: ${cleanDomain}\n`;
+    output += '═'.repeat(50) + '\n\n';
+    
+    // DNS Records
+    output += '📋 DNS RECORDS:\n';
+    output += '─'.repeat(30) + '\n';
+    for (const [type, values] of Object.entries(results.dns)) {
+      values.forEach(v => { output += `  ${type.padEnd(6)} → ${v}\n`; });
+    }
+    if (Object.keys(results.dns).length === 0) output += '  (No records found or DNS query failed)\n';
+    
+    // Tech detection
+    if (techHints.length > 0) {
+      output += '\n🔧 DETECTED TECHNOLOGIES:\n';
+      output += '─'.repeat(30) + '\n';
+      [...new Set(techHints)].forEach(h => { output += `  • ${h}\n`; });
+    }
+    
+    // Subdomains from CT
+    output += `\n🌐 SUBDOMAINS (${results.subdomains.length} found via Certificate Transparency):\n`;
+    output += '─'.repeat(30) + '\n';
+    if (results.subdomains.length > 0) {
+      results.subdomains.forEach(s => { output += `  • ${s}\n`; });
+    } else {
+      output += '  (No subdomains discovered)\n';
+    }
+    
+    // Attack surface summary
+    output += '\n⚔️ ATTACK SURFACE SUMMARY:\n';
+    output += '─'.repeat(30) + '\n';
+    const attackPoints = [];
+    if (results.dns.A) attackPoints.push(`Web server: ${results.dns.A[0]}`);
+    if (results.dns.MX) attackPoints.push(`Mail server exposed`);
+    if (results.dns.TXT && results.dns.TXT.some(t => t.includes('v=spf1'))) {
+      attackPoints.push('SPF present — check DMARC/DKIM alignment');
+    }
+    if (results.subdomains.length > 10) attackPoints.push(`Large subdomain surface (${results.subdomains.length} subdomains)`);
+    if (techHints.includes('Cloudflare (CDN/WAF)')) attackPoints.push('Behind Cloudflare WAF — direct IP bypass may be possible');
+    attackPoints.forEach(a => { output += `  ⚠️ ${a}\n`; });
+    
+    output += `\n📊 Total attack surface: ${Object.keys(results.dns).length} record types, ${results.subdomains.length} subdomains, ${results.certLogs.length} certificates`;
+    
+    return JSON.stringify({ result: output });
+  } catch (e) {
+    return JSON.stringify({ error: `Analysis failed: ${e.message}` });
+  }
+};
+</script>
+</body></html>

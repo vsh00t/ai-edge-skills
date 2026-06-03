@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IOC Parser</title>
+<script>
+/**
+ * IOC Parser — Extracts and enriches Indicators of Compromise from text.
+ * Supports: IPv4, IPv6, domains, URLs, MD5/SHA1/SHA256 hashes, emails, CVE IDs.
+ * Optional VirusTotal enrichment.
+ */
+
+// ── IOC Regex Patterns ──
+
+const IOC_PATTERNS = {
+  // IPv4 — exclude localhost, broadcast, multicast
+  ipv4: {
+    regex: /\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b/g,
+    label: 'IPv4 Address'
+  },
+
+  // IPv6 — standard notation
+  ipv6: {
+    regex: /(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|:(?::[0-9a-fA-F]{1,4}){1,7}|::(?:ffff:)?(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}|::)/g,
+    label: 'IPv6 Address'
+  },
+
+  // MD5 hash (32 hex chars)
+  md5: {
+    regex: /\b[a-fA-F0-9]{32}\b/g,
+    label: 'MD5 Hash'
+  },
+
+  // SHA1 hash (40 hex chars)
+  sha1: {
+    regex: /\b[a-fA-F0-9]{40}\b/g,
+    label: 'SHA1 Hash'
+  },
+
+  // SHA256 hash (64 hex chars)
+  sha256: {
+    regex: /\b[a-fA-F0-9]{64}\b/g,
+    label: 'SHA256 Hash'
+  },
+
+  // Email addresses
+  email: {
+    regex: /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g,
+    label: 'Email Address'
+  },
+
+  // CVE IDs
+  cve: {
+    regex: /CVE-\d{4}-\d{4,7}/gi,
+    label: 'CVE ID'
+  },
+
+  // URLs
+  url: {
+    regex: /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi,
+    label: 'URL'
+  },
+
+  // Domains (must come after URLs are extracted)
+  domain: {
+    regex: /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b/g,
+    label: 'Domain'
+  }
+};
+
+// Known safe/private IPs to flag
+const PRIVATE_IP_RANGES = [
+  { start: '10.0.0.0', end: '10.255.255.255' },
+  { start: '172.16.0.0', end: '172.31.255.255' },
+  { start: '192.168.0.0', end: '192.168.255.255' },
+  { start: '127.0.0.0', end: '127.255.255.255' }
+];
+
+function ipToNum(ip) {
+  const parts = ip.split('.').map(Number);
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+function isPrivateIP(ip) {
+  try {
+    const num = ipToNum(ip);
+    for (const range of PRIVATE_IP_RANGES) {
+      if (num >= ipToNum(range.start) && num <= ipToNum(range.end)) return true;
+    }
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
+// Known suspicious TLDs
+const SUSPICIOUS_TLDS = new Set([
+  'tk', 'ml', 'ga', 'cf', 'gq', 'xyz', 'top', 'pw', 'cc', 'ws',
+  'club', 'work', 'party', 'trade', 'date', 'loan', 'men', 'stream',
+  'download', 'racing', 'win', 'bid', 'ren', 'science', 'accountant'
+]);
+
+// Known URL shorteners
+const URL_SHORTENERS = new Set([
+  'bit.ly', 't.co', 'tinyurl.com', 'goo.gl', 'ow.ly', 'is.gd',
+  'buff.ly', 'rebrand.ly', 'shorte.st', 'adf.ly', 'bit.do',
+  'mcaf.ee', 'su.pr', 'cli.gs', 'lnkd.in', 'db.tt', 'qr.ae'
+]);
+
+/**
+ * Deduplicate array while preserving order.
+ */
+function unique(arr) {
+  return [...new Set(arr)];
+}
+
+/**
+ * Extract domains from URL strings.
+ */
+function extractDomainFromUrl(url) {
+  try {
+    const match = url.match(/^https?:\/\/([a-zA-Z0-9.\-]+)/);
+    return match ? match[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Enrich an IOC using VirusTotal API.
+ */
+async function enrichWithVirusTotal(ioc, type, apiKey) {
+  if (!apiKey) return null;
+
+  try {
+    let endpoint;
+    const headers = { 'x-apikey': apiKey };
+
+    switch (type) {
+      case 'ipv4':
+      case 'ipv6':
+        endpoint = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ioc)}`;
+        break;
+      case 'domain':
+        endpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(ioc)}`;
+        break;
+      case 'url':
+        // VT v3 requires URL ID encoding
+        const urlId = btoa(ioc).replace(/=/g, '');
+        endpoint = `https://www.virustotal.com/api/v3/urls/${urlId}`;
+        break;
+      case 'md5':
+      case 'sha1':
+      case 'sha256':
+        endpoint = `https://www.virustotal.com/api/v3/files/${encodeURIComponent(ioc)}`;
+        break;
+      default:
+        return null;
+    }
+
+    const response = await fetch(endpoint, { headers });
+
+    if (!response.ok) {
+      return { error: `VT API returned ${response.status}`, ioc };
+    }
+
+    const data = await response.json();
+    const attrs = data.data?.attributes || {};
+    const stats = attrs.last_analysis_stats || {};
+
+    return {
+      ioc,
+      type,
+      vendor_detections: stats.malicious || 0,
+      total_vendors: (stats.malicious || 0) + (stats.undetected || 0) + (stats.suspicious || 0) + (stats.harmless || 0),
+      reputation: attrs.reputation || 0,
+      tags: attrs.tags || [],
+      country: attrs.country || null,
+      asn: attrs.asn || null,
+      whois: attrs.whois || null
+    };
+  } catch (err) {
+    return { error: `VT error: ${err.message}`, ioc };
+  }
+}
+
+/**
+ * Assess risk for an IOC based on type and enrichment data.
+ */
+function assessRisk(ioc, type, enrichment) {
+  let risk = 'Low';
+  let reasons = [];
+
+  // IP-based risk
+  if (type === 'ipv4' || type === 'ipv6') {
+    if (isPrivateIP(ioc)) {
+      risk = 'Info';
+      reasons.push('Private/internal IP');
+    }
+  }
+
+  // Domain-based risk
+  if (type === 'domain') {
+    const tld = ioc.split('.').pop().toLowerCase();
+    if (SUSPICIOUS_TLDS.has(tld)) {
+      risk = 'Medium';
+      reasons.push(`Suspicious TLD (.${tld})`);
+    }
+    if (URL_SHORTENERS.has(ioc.toLowerCase())) {
+      risk = 'Medium';
+      reasons.push('URL shortener domain');
+    }
+  }
+
+  // URL-based risk
+  if (type === 'url') {
+    const domain = extractDomainFromUrl(ioc);
+    if (domain && SUSPICIOUS_TLDS.has(domain.split('.').pop().toLowerCase())) {
+      risk = 'Medium';
+      reasons.push('Uses suspicious TLD');
+    }
+    if (/^https?:\/\/\d+\.\d+\.\d+\.\d+/.test(ioc)) {
+      risk = 'High';
+      reasons.push('IP-based URL');
+    }
+  }
+
+  // Enrichment-based risk
+  if (enrichment && !enrichment.error) {
+    if (enrichment.vendor_detections > 10) {
+      risk = 'Critical';
+      reasons.push(`${enrichment.vendor_detections} vendors flag as malicious`);
+    } else if (enrichment.vendor_detections > 3) {
+      risk = 'High';
+      reasons.push(`${enrichment.vendor_detections} vendors flag as malicious`);
+    } else if (enrichment.vendor_detections > 0) {
+      risk = 'Medium';
+      reasons.push(`${enrichment.vendor_detections} vendors flag as suspicious`);
+    }
+    if (enrichment.reputation < -50) {
+      risk = 'High';
+      reasons.push('Very negative reputation');
+    }
+  }
+
+  return { risk, reasons };
+}
+
+/**
+ * Main result function — entry point for AI Edge Gallery.
+ */
+window['ai_edge_gallery_get_result'] = async (data) => {
+  let parsed;
+  if (typeof data === 'string') {
+    parsed = JSON.parse(data);
+  } else {
+    parsed = data;
+  }
+
+  const text = parsed.text || parsed.content || '';
+  const apiKey = parsed.virustotal_api_key || '';
+
+  if (!text) {
+    return JSON.stringify({ result: 'Error: No text provided for IOC extraction.' });
+  }
+
+  // ── Extract IOCs ──
+  // Order matters: extract hashes (longest) first, then URLs before domains
+  const extracted = {};
+
+  // SHA256 first (longest)
+  extracted.sha256 = unique((text.match(IOC_PATTERNS.sha256.regex) || []));
+  // Remove SHA256 matches from text for further matching
+  let cleanedText = text;
+  extracted.sha256.forEach(h => { cleanedText = cleanedText.replace(h, ' '); });
+
+  // SHA1
+  extracted.sha1 = unique((cleanedText.match(IOC_PATTERNS.sha1.regex) || []));
+  extracted.sha1.forEach(h => { cleanedText = cleanedText.replace(h, ' '); });
+
+  // MD5
+  extracted.md5 = unique((cleanedText.match(IOC_PATTERNS.md5.regex) || []));
+  extracted.md5.forEach(h => { cleanedText = cleanedText.replace(h, ' '); });
+
+  // URLs
+  extracted.url = unique((cleanedText.match(IOC_PATTERNS.url.regex) || []));
+  const urlDomains = extracted.url.map(extractDomainFromUrl).filter(Boolean);
+
+  // Emails
+  extracted.email = unique((cleanedText.match(IOC_PATTERNS.email.regex) || []));
+  extracted.email.forEach(e => { cleanedText = cleanedText.replace(e, ' '); });
+
+  // CVEs
+  extracted.cve = unique((cleanedText.match(IOC_PATTERNS.cve.regex) || [])).map(c => c.toUpperCase());
+
+  // IPs
+  extracted.ipv4 = unique((cleanedText.match(IOC_PATTERNS.ipv4.regex) || []))
+    .filter(ip => ip !== '0.0.0.0');
+  extracted.ipv6 = unique((cleanedText.match(IOC_PATTERNS.ipv6.regex) || []));
+
+  // Domains — filter out URL hostnames and common non-domains
+  const allDomains = unique((cleanedText.match(IOC_PATTERNS.domain.regex) || []));
+  extracted.domain = allDomains.filter(d => {
+    const lower = d.toLowerCase();
+    // Filter out URL domains already captured, common words, and short strings
+    if (urlDomains.includes(lower)) return false;
+    if (['example.com', 'example.org', 'localhost'].includes(lower)) return false;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(d)) return false;
+    return true;
+  });
+
+  // ── VirusTotal Enrichment ──
+  const enrichments = {};
+  if (apiKey) {
+    // Enrich up to 5 IOCs of each key type
+    const toEnrich = [
+      ...extracted.ipv4.slice(0, 5).map(i => ({ ioc: i, type: 'ipv4' })),
+      ...extracted.domain.slice(0, 5).map(i => ({ ioc: i, type: 'domain' })),
+      ...extracted.sha256.slice(0, 3).map(i => ({ ioc: i, type: 'sha256' })),
+      ...extracted.sha1.slice(0, 3).map(i => ({ ioc: i, type: 'sha1' })),
+      ...extracted.md5.slice(0, 3).map(i => ({ ioc: i, type: 'md5' })),
+    ];
+
+    // Fetch enrichments (with rate limit consideration — sequential)
+    for (const item of toEnrich) {
+      const result = await enrichWithVirusTotal(item.ioc, item.type, apiKey);
+      if (result) {
+        enrichments[item.ioc] = result;
+      }
+    }
+  }
+
+  // ── Risk Assessment ──
+  const riskItems = [];
+  for (const [type, iocs] of Object.entries(extracted)) {
+    for (const ioc of iocs) {
+      const enrichment = enrichments[ioc] || null;
+      const { risk, reasons } = assessRisk(ioc, type, enrichment);
+      riskItems.push({ ioc, type, risk, reasons, enrichment });
+    }
+  }
+
+  // ── Format Output ──
+  const lines = [];
+  lines.push('╔══════════════════════════════════════════════════╗');
+  lines.push('║           🔍 IOC PARSER RESULTS                 ║');
+  lines.push('╚══════════════════════════════════════════════════╝');
+  lines.push('');
+
+  // Summary
+  lines.push('── 📊 Extraction Summary ──');
+  const typeCounts = {
+    ipv4: ['IPv4 Addresses', extracted.ipv4.length],
+    ipv6: ['IPv6 Addresses', extracted.ipv6.length],
+    domain: ['Domains', extracted.domain.length],
+    url: ['URLs', extracted.url.length],
+    md5: ['MD5 Hashes', extracted.md5.length],
+    sha1: ['SHA1 Hashes', extracted.sha1.length],
+    sha256: ['SHA256 Hashes', extracted.sha256.length],
+    email: ['Email Addresses', extracted.email.length],
+    cve: ['CVE IDs', extracted.cve.length]
+  };
+
+  let totalIOCs = 0;
+  for (const [label, count] of Object.values(typeCounts)) {
+    if (count > 0) {
+      lines.push(`  ${label}: ${count}`);
+      totalIOCs += count;
+    }
+  }
+  lines.push(`  ─────────────────`);
+  lines.push(`  Total IOCs: ${totalIOCs}`);
+  lines.push('');
+
+  // Detailed IOCs by category
+  for (const [type, [label, count]] of Object.entries(typeCounts)) {
+    if (count === 0) continue;
+    const iocs = extracted[type];
+    lines.push(`── ${label} ──`);
+    iocs.forEach(ioc => {
+      const riskItem = riskItems.find(r => r.ioc === ioc && r.type === type);
+      let detail = `  • ${ioc}`;
+
+      // Extra context for IPs
+      if (type === 'ipv4') {
+        if (isPrivateIP(ioc)) detail += ' [PRIVATE]';
+      }
+
+      // Risk indicator
+      if (riskItem && riskItem.risk !== 'Low' && riskItem.risk !== 'Info') {
+        const emoji = { Critical: '🔴', High: '🟠', Medium: '🟡' }[riskItem.risk] || '⚪';
+        detail += ` ${emoji} ${riskItem.risk}`;
+        if (riskItem.reasons.length > 0) {
+          detail += ` — ${riskItem.reasons.join(', ')}`;
+        }
+      }
+      lines.push(detail);
+    });
+    lines.push('');
+  }
+
+  // Enrichment data
+  const enrichmentKeys = Object.keys(enrichments);
+  if (enrichmentKeys.length > 0) {
+    lines.push('── 🔬 VirusTotal Enrichment ──');
+    for (const [ioc, data] of Object.entries(enrichments)) {
+      if (data.error) {
+        lines.push(`  • ${ioc}: ${data.error}`);
+        continue;
+      }
+      lines.push(`  • ${ioc} (${data.type})`);
+      if (data.vendor_detections !== undefined) {
+        const det = data.vendor_detections;
+        const total = data.total_vendors || 0;
+        const pct = total > 0 ? Math.round(det / total * 100) : 0;
+        lines.push(`    Detections: ${det}/${total} (${pct}%)`);
+      }
+      if (data.reputation) lines.push(`    Reputation: ${data.reputation}`);
+      if (data.country) lines.push(`    Country: ${data.country}`);
+      if (data.asn) lines.push(`    ASN: ${data.asn}`);
+      if (data.tags && data.tags.length > 0) lines.push(`    Tags: ${data.tags.slice(0, 5).join(', ')}`);
+    }
+    lines.push('');
+  } else if (!apiKey) {
+    lines.push('── 🔬 VirusTotal Enrichment ──');
+    lines.push('  No API key provided. Pass virustotal_api_key for enrichment.');
+    lines.push('');
+  }
+
+  // Risk summary
+  lines.push('── ⚠️ Risk Assessment ──');
+  const riskCounts = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
+  riskItems.forEach(r => { riskCounts[r.risk] = (riskCounts[r.risk] || 0) + 1; });
+  lines.push(`  🔴 Critical: ${riskCounts.Critical}`);
+  lines.push(`  🟠 High:     ${riskCounts.High}`);
+  lines.push(`  🟡 Medium:   ${riskCounts.Medium}`);
+  lines.push(`  🟢 Low:      ${riskCounts.Low}`);
+  lines.push(`  ℹ️  Info:     ${riskCounts.Info}`);
+  lines.push('');
+
+  if (totalIOCs === 0) {
+    lines.push('  No IOCs detected in the provided text.');
+  }
+
+  return JSON.stringify({ result: lines.join('\n') });
+};
+</script>
+</head>
+<body>
+<p>IOC Parser — loaded and ready.</p>
+</body>
+</html>

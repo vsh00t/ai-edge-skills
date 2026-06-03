@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report Generator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f1923; color: #e0e0e0; padding: 20px; }
+  .container { max-width: 1000px; margin: 0 auto; }
+  h1 { color: #00d4ff; margin-bottom: 20px; font-size: 1.5em; }
+  h2 { color: #00d4ff; margin: 20px 0 10px; font-size: 1.2em; border-bottom: 1px solid #1e3a4f; padding-bottom: 5px; }
+  .report-header { background: linear-gradient(135deg, #1a2a3a, #0f1923); padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #1e3a4f; }
+  .report-header table { width: 100%; }
+  .report-header td { padding: 4px 10px; }
+  .report-header .label { color: #8899aa; font-weight: 600; white-space: nowrap; }
+  .summary-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+  .summary-table th { background: #1a2a3a; color: #00d4ff; padding: 10px; text-align: left; border: 1px solid #1e3a4f; }
+  .summary-table td { padding: 10px; border: 1px solid #1e3a4f; }
+  .finding-card { background: #1a2a3a; border-radius: 8px; margin: 15px 0; overflow: hidden; border: 1px solid #1e3a4f; }
+  .finding-header { padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
+  .finding-header h3 { font-size: 1em; }
+  .finding-body { padding: 12px 16px; }
+  .finding-body p { margin: 8px 0; line-height: 1.5; }
+  .finding-body .label { color: #8899aa; font-weight: 600; display: block; margin-top: 10px; }
+  .severity-badge { padding: 4px 12px; border-radius: 12px; font-size: 0.85em; font-weight: 700; color: #fff; text-transform: uppercase; }
+  .severity-Critical { background: #dc3545; }
+  .severity-High { background: #fd7e14; }
+  .severity-Medium { background: #ffc107; color: #000; }
+  .severity-Low { background: #0d6efd; }
+  .severity-Info { background: #6c757d; }
+  .risk-matrix { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 15px 0; }
+  .risk-cell { padding: 10px; text-align: center; border-radius: 4px; font-size: 0.8em; font-weight: 600; }
+  .risk-critical { background: #dc3545; color: #fff; }
+  .risk-high { background: #fd7e14; color: #fff; }
+  .risk-medium { background: #ffc107; color: #000; }
+  .risk-low { background: #0d6efd; color: #fff; }
+  .risk-info { background: #6c757d; color: #fff; }
+  #output { margin-top: 20px; }
+  .loading { text-align: center; color: #00d4ff; padding: 40px; }
+  .loading .spinner { display: inline-block; width: 30px; height: 30px; border: 3px solid #1e3a4f; border-top-color: #00d4ff; border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🛡️ Cybersecurity Report Generator</h1>
+  <div id="output"><div class="loading"><div class="spinner"></div><p>Generating report...</p></div></div>
+</div>
+
+<script>
+/**
+ * Report Generator — AI Edge Gallery Skill
+ * Generates professional cybersecurity pentest/audit reports from raw findings JSON.
+ * Severity color coding: Critical=red, High=orange, Medium=yellow, Low=blue, Info=gray
+ */
+
+// Severity configuration with colors
+const SEVERITY_CONFIG = {
+  Critical: { color: '#dc3545', order: 0 },
+  High:     { color: '#fd7e14', order: 1 },
+  Medium:   { color: '#ffc107', order: 2 },
+  Low:      { color: '#0d6efd', order: 3 },
+  Info:     { color: '#6c757d', order: 4 }
+};
+
+/**
+ * Build the executive summary table showing counts per severity
+ */
+function buildExecutiveSummary(findings) {
+  const counts = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
+  findings.forEach(f => {
+    const sev = f.severity || 'Info';
+    if (counts.hasOwnProperty(sev)) counts[sev]++;
+  });
+
+  let html = '<h2>📊 Executive Summary</h2>';
+  html += '<table class="summary-table"><tr><th>Total Findings</th>';
+  Object.keys(counts).forEach(s => html += `<th>${s}</th>`);
+  html += '</tr><tr><td style="text-align:center;font-weight:700;font-size:1.2em;">' + findings.length + '</td>';
+  Object.keys(counts).forEach(s => {
+    html += `<td style="text-align:center;"><span class="severity-badge severity-${s}">${counts[s]}</span></td>`;
+  });
+  html += '</tr></table>';
+
+  // Risk rating matrix (likelihood x impact grid)
+  html += '<h2>🎯 Risk Rating Matrix</h2>';
+  html += '<div class="risk-matrix">';
+  const riskLabels = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+  riskLabels.forEach(level => {
+    const count = counts[level] || 0;
+    html += `<div class="risk-cell risk-${level.toLowerCase()}">${level}<br>${count} finding${count !== 1 ? 's' : ''}</div>`;
+  });
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Build detailed finding cards
+ */
+function buildDetailedFindings(findings) {
+  // Sort by severity
+  const sorted = [...findings].sort((a, b) => {
+    const orderA = SEVERITY_CONFIG[a.severity]?.order ?? 4;
+    const orderB = SEVERITY_CONFIG[b.severity]?.order ?? 4;
+    return orderA - orderB;
+  });
+
+  let html = '<h2>🔍 Detailed Findings</h2>';
+  sorted.forEach((f, idx) => {
+    const sev = f.severity || 'Info';
+    html += `<div class="finding-card">
+      <div class="finding-header" style="border-left: 4px solid ${SEVERITY_CONFIG[sev]?.color || '#6c757d'};">
+        <h3>${idx + 1}. ${escapeHtml(f.title || 'Untitled Finding')}</h3>
+        <span class="severity-badge severity-${sev}">${sev}</span>
+      </div>
+      <div class="finding-body">
+        <p><strong>Component:</strong> ${escapeHtml(f.component || f.affected_component || 'N/A')}</p>
+        <p>${escapeHtml(f.description || '')}</p>
+        <span class="label">👁️ Observation</span>
+        <p>${escapeHtml(f.observation || 'No observation recorded.')}</p>
+        <span class="label">✅ Recommendation</span>
+        <p>${escapeHtml(f.recommendation || 'No recommendation provided.')}</p>
+      </div>
+    </div>`;
+  });
+
+  return html;
+}
+
+/**
+ * Escape HTML special characters
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/**
+ * Build the complete report HTML
+ */
+function buildReport(data) {
+  const findings = data.findings || [];
+  const meta = data.metadata || {};
+
+  let html = '<div class="report-header"><table>';
+  if (meta.project) html += `<tr><td class="label">Project:</td><td>${escapeHtml(meta.project)}</td></tr>`;
+  if (meta.client) html += `<tr><td class="label">Client:</td><td>${escapeHtml(meta.client)}</td></tr>`;
+  if (meta.assessor) html += `<tr><td class="label">Assessor:</td><td>${escapeHtml(meta.assessor)}</td></tr>`;
+  html += `<tr><td class="label">Date:</td><td>${escapeHtml(meta.date || new Date().toISOString().split('T')[0])}</td></tr>`;
+  html += `<tr><td class="label">Total Findings:</td><td>${findings.length}</td></tr>`;
+  html += '</table></div>';
+
+  html += buildExecutiveSummary(findings);
+  html += buildDetailedFindings(findings);
+
+  // Footer
+  html += '<div style="margin-top:30px;padding:15px;background:#1a2a3a;border-radius:8px;text-align:center;color:#6c757d;font-size:0.85em;">';
+  html += 'Report generated by AI Edge Gallery — Report Generator Skill<br>';
+  html += `Generated: ${new Date().toISOString()}`;
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * AI Edge Gallery entry point.
+ * Receives JSON data from the LLM and returns the HTML report as a string.
+ * @param {Object} data - The parsed JSON input from the LLM
+ * @returns {string} JSON.stringify({ result: "..." }) with the HTML report
+ */
+window['ai_edge_gallery_get_result'] = async (data) => {
+  try {
+    // If data is a string, parse it
+    if (typeof data === 'string') {
+      data = JSON.parse(data);
+    }
+
+    const reportHtml = buildReport(data);
+
+    // Also render in the page for preview
+    document.getElementById('output').innerHTML = reportHtml;
+
+    return JSON.stringify({ result: reportHtml });
+  } catch (error) {
+    const errorMsg = `<div style="color:#dc3545;padding:20px;"><strong>Error generating report:</strong> ${escapeHtml(error.message)}</div>`;
+    document.getElementById('output').innerHTML = errorMsg;
+    return JSON.stringify({ result: errorMsg });
+  }
+};
+
+// Auto-detect if data was passed via URL params or global variable
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.__ai_edge_data) {
+    window['ai_edge_gallery_get_result'](window.__ai_edge_data);
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SAST Code Reviewer</title>
+<script>
+/**
+ * SAST Code Reviewer — Static analysis for OWASP Top 10 vulnerabilities.
+ * Supports Java/Spring, Python, and JavaScript.
+ */
+
+// ══════════════════════════════════════════════════
+// OWASP Top 10 Categories
+// ══════════════════════════════════════════════════
+
+const OWASP = {
+  A01: { id: 'A01:2021', name: 'Broken Access Control' },
+  A02: { id: 'A02:2021', name: 'Cryptographic Failures' },
+  A03: { id: 'A03:2021', name: 'Injection' },
+  A04: { id: 'A04:2021', name: 'Insecure Design' },
+  A05: { id: 'A05:2021', name: 'Security Misconfiguration' },
+  A06: { id: 'A06:2021', name: 'Vulnerable & Outdated Components' },
+  A07: { id: 'A07:2021', name: 'Identification & Authentication Failures' },
+  A08: { id: 'A08:2021', name: 'Software & Data Integrity Failures' },
+  A09: { id: 'A09:2021', name: 'Security Logging & Monitoring Failures' },
+  A10: { id: 'A10:2021', name: 'Server-Side Request Forgery (SSRF)' }
+};
+
+// ══════════════════════════════════════════════════
+// Detection Rules Database
+// ══════════════════════════════════════════════════
+
+const RULES = {
+  // ── SQL Injection (A03) ──
+  sql_injection_string_concat: {
+    severity: 'Critical',
+    owasp: 'A03',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Java: String concatenation in SQL
+      { regex: /(?:executeQuery|executeUpdate|execute|createQuery|createNativeQuery)\s*\([^)]*(?:\+\s*[^+]|String\.format|\.concat)[^)]*\)/gi, languages: ['java'] },
+      // Python: f-strings or + in SQL
+      { regex: /(?:execute|cursor\.\w*execute)\s*\([^)]*(?:%s|f["']|\+|\.format)[^)]*\)/gi, languages: ['python'] },
+      // JavaScript: string concat in SQL
+      { regex: /(?:query|execute|run)\s*\([^)]*(?:\+\s*[^+]|`[^`]*\$\{|\.concat)[^)]*\)/gi, languages: ['javascript'] }
+    ],
+    description: 'SQL query built with string concatenation — vulnerable to SQL injection',
+    remediation: 'Use parameterized queries/prepared statements. Never concatenate user input into SQL.'
+  },
+
+  sql_injection_raw_query: {
+    severity: 'Critical',
+    owasp: 'A03',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      { regex: /(?:createNativeQuery|nativeQuery|raw\s*query|rawQuery)\s*\(/gi, languages: ['java', 'javascript'] },
+      { regex: /raw\s*\(\s*["'].*?(?:SELECT|INSERT|UPDATE|DELETE).*?\)/gi, languages: ['python'] }
+    ],
+    description: 'Raw/native SQL query detected — verify it uses parameterized inputs',
+    remediation: 'Use ORM methods or parameterized queries. Validate all inputs passed to raw queries.'
+  },
+
+  // ── XSS (A03) ──
+  xss_innerhtml: {
+    severity: 'High',
+    owasp: 'A03',
+    languages: ['javascript'],
+    patterns: [
+      { regex: /\.innerHTML\s*=/gi, languages: ['javascript'] },
+      { regex: /\.outerHTML\s*=/gi, languages: ['javascript'] },
+      { regex: /document\.write\s*\(/gi, languages: ['javascript'] }
+    ],
+    description: 'Direct DOM manipulation with innerHTML/outerHTML/document.write — XSS risk',
+    remediation: 'Use textContent, createElement, or a sanitization library (DOMPurify).'
+  },
+
+  xss_unescaped_output: {
+    severity: 'High',
+    owasp: 'A03',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // JSP
+      { regex: /<%=\s*(?:request|param|header)\./gi, languages: ['java'] },
+      // Thymeleaf unescaped
+      { regex: /th:utext\s*=/gi, languages: ['java'] },
+      // Flask/Jinja2 unescaped
+      { regex: /\|\s*safe\b/gi, languages: ['python'] },
+      // Express response without escaping
+      { regex: /res\.(send|end|write)\s*\([^)]*\+/gi, languages: ['javascript'] }
+    ],
+    description: 'Unescaped output detected — potential XSS vulnerability',
+    remediation: 'Always escape output. Use context-aware encoding. Avoid |safe in templates unless necessary.'
+  },
+
+  // ── Command Injection (A03) ──
+  command_injection: {
+    severity: 'Critical',
+    owasp: 'A03',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Java
+      { regex: /Runtime\.getRuntime\(\)\.exec\s*\(/gi, languages: ['java'] },
+      { regex: /ProcessBuilder\s*\(/gi, languages: ['java'] },
+      // Python
+      { regex: /(?:os\.system|os\.popen|subprocess\.(?:call|run|Popen|check_output))\s*\([^)]*(?:%|f["']|\+|\.format)/gi, languages: ['python'] },
+      { regex: /eval\s*\([^)]*(?:input|request|raw_input)/gi, languages: ['python'] },
+      // Node.js
+      { regex: /(?:exec|execSync|spawn|execFile)\s*\([^)]*(?:\+|`[^`]*\$\{|\.concat)/gi, languages: ['javascript'] }
+    ],
+    description: 'OS command execution with potential user input — command injection risk',
+    remediation: 'Avoid shell commands with user input. Use allowlists, parameterized APIs, or libraries.'
+  },
+
+  // ── Path Traversal (A01) ──
+  path_traversal: {
+    severity: 'High',
+    owasp: 'A01',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Java
+      { regex: /new\s+(?:File|FileInputStream|FileOutputStream|RandomAccessFile)\s*\([^)]*(?:request|param|getParameter|pathVariable|PathVariable)/gi, languages: ['java'] },
+      { regex: /Paths\.get\s*\([^)]*(?:request|param)/gi, languages: ['java'] },
+      // Python
+      { regex: /open\s*\([^)]*(?:request|input|args|params)/gi, languages: ['python'] },
+      { regex: /(?:os\.path\.join|pathlib\.Path)\s*\([^)]*(?:request|args|params)/gi, languages: ['python'] },
+      // Node.js
+      { regex: /(?:readFile|writeFile|createReadStream|createWriteStream)\s*\([^)]*(?:req\.|request|params|query)/gi, languages: ['javascript'] },
+      { regex: /path\.join\s*\([^)]*(?:req\.|request|params|query)/gi, languages: ['javascript'] }
+    ],
+    description: 'File operation with user-controlled path — path traversal risk',
+    remediation: 'Validate and sanitize file paths. Use chroot/jail, resolve and verify paths are within allowed directories.'
+  },
+
+  // ── Hardcoded Credentials (A07) ──
+  hardcoded_credentials: {
+    severity: 'High',
+    owasp: 'A07',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      { regex: /(?:password|passwd|pwd|secret|api_key|apikey|access_key|secret_key|token|auth_token)\s*[:=]\s*["'][^"']{3,}["']/gi, languages: ['java', 'python', 'javascript'] },
+      { regex: /jdbc:\w+:\/\/[^\s]+(?:password|pwd)=\w+/gi, languages: ['java'] },
+      { regex: /Basic\s+\w{10,}/gi, languages: ['java', 'python', 'javascript'] }
+    ],
+    description: 'Hardcoded credential or secret detected in source code',
+    remediation: 'Use environment variables, secret management (Vault, AWS Secrets Manager), or configuration files outside the repo.'
+  },
+
+  // ── SSRF (A10) ──
+  ssrf: {
+    severity: 'High',
+    owasp: 'A10',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Java
+      { regex: /(?:URL\s*\(|HttpURLConnection|RestTemplate|WebClient|HttpClient)\s*\([^)]*(?:request|param|getParameter|userInput)/gi, languages: ['java'] },
+      // Python
+      { regex: /(?:requests\.(?:get|post|put|delete|head|patch)|urllib\.request\.urlopen|httpx\.\w+)\s*\([^)]*(?:request|args|params|input)/gi, languages: ['python'] },
+      // Node.js
+      { regex: /(?:fetch|axios|request|http\.get|https\.get)\s*\([^)]*(?:req\.|request|params|query|body)/gi, languages: ['javascript'] }
+    ],
+    description: 'HTTP request with user-controlled URL — SSRF risk',
+    remediation: 'Validate URLs against an allowlist. Block private/internal IPs. Use network policies.'
+  },
+
+  // ── Insecure Crypto (A02) ──
+  insecure_crypto: {
+    severity: 'High',
+    owasp: 'A02',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Weak algorithms
+      { regex: /(?:DES|RC4|MD5|SHA1|SHA-1|ECB|Blowfish)\s*[\(\[]/gi, languages: ['java', 'python', 'javascript'] },
+      { regex: /Cipher\.getInstance\s*\(\s*["'].*?(?:DES|RC4|ECB|Blowfish)/gi, languages: ['java'] },
+      { regex: /hashlib\.(?:md5|sha1)\s*\(/gi, languages: ['python'] },
+      { regex: /crypto\.create(?:Cipher|Hash|Decipher)\s*\(\s*["'].*?(?:des|rc4|md5|sha1)/gi, languages: ['javascript'] },
+      // Weak key sizes
+      { regex: /(?:AES|RSA|DSA)\s*.*?(?:128|512|768|1024)/gi, languages: ['java', 'python', 'javascript'] }
+    ],
+    description: 'Use of weak or deprecated cryptographic algorithm',
+    remediation: 'Use AES-256-GCM, RSA-2048+, SHA-256+. Never use MD5/SHA1 for security purposes.'
+  },
+
+  // ── Insecure Deserialization (A08) ──
+  insecure_deserialization: {
+    severity: 'Critical',
+    owasp: 'A08',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Java
+      { regex: /ObjectInputStream\s*\(/gi, languages: ['java'] },
+      { regex: /readObject\s*\(\s*\)/gi, languages: ['java'] },
+      { regex: /(?:XMLDecoder|Yaml\.load|fromXML)\s*\(/gi, languages: ['java'] },
+      // Python
+      { regex: /pickle\.loads?\s*\(/gi, languages: ['python'] },
+      { regex: /yaml\.load\s*\([^)]*(?!Loader)/gi, languages: ['python'] },
+      { regex: /marshal\.loads?\s*\(/gi, languages: ['python'] },
+      // Node.js
+      { regex: /deserialize\s*\([^)]*(?:eval|Function)/gi, languages: ['javascript'] },
+      { regex: /node-serialize|serialize-to-js/gi, languages: ['javascript'] }
+    ],
+    description: 'Potentially unsafe deserialization — remote code execution risk',
+    remediation: 'Use safe serialization formats (JSON). Implement type allowlists. Avoid deserializing untrusted data.'
+  },
+
+  // ── XXE (A05) ──
+  xxe: {
+    severity: 'Critical',
+    owasp: 'A05',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Java
+      { regex: /DocumentBuilderFactory\s*\(/gi, languages: ['java'] },
+      { regex: /SAXParserFactory\s*\(/gi, languages: ['java'] },
+      { regex: /XMLInputFactory\s*\(/gi, languages: ['java'] },
+      { regex: /TransformerFactory\s*\(/gi, languages: ['java'] },
+      { regex: /SchemaFactory\s*\(/gi, languages: ['java'] },
+      // Python
+      { regex: /xml\.etree\.ElementTree\.fromstring\s*\(/gi, languages: ['python'] },
+      { regex: /lxml\.etree\.fromstring\s*\(/gi, languages: ['python'] },
+      { regex: /xml\.sax/gi, languages: ['python'] },
+      // Node.js
+      { regex: /libxmljs|xml2js.*explicitArray.*false|sax\s*\(/gi, languages: ['javascript'] }
+    ],
+    description: 'XML parser detected — verify XXE protections are enabled',
+    remediation: 'Disable external entities (setFeature disallow-doctype-decl). Use JSON when possible.'
+  },
+
+  // ── Security Misconfiguration (A05) ──
+  security_misconfig: {
+    severity: 'Medium',
+    owasp: 'A05',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Debug mode
+      { regex: /DEBUG\s*[:=]\s*(?:True|true|1)/gi, languages: ['python', 'java', 'javascript'] },
+      { regex: /app\.config\['DEBUG'\]\s*=\s*True/gi, languages: ['python'] },
+      // CORS wildcard
+      { regex: /Access-Control-Allow-Origin\s*[:=]\s*["']\*["']/gi, languages: ['java', 'python', 'javascript'] },
+      { regex: /cors\s*\(\s*\{[^}]*(?:origin|allowedOrigins)\s*[:=]\s*["']\*["']/gi, languages: ['javascript'] },
+      // HTTP (not HTTPS)
+      { regex: /http:\/\//gi, languages: ['java', 'python', 'javascript'] },
+      // Spring actuator exposed
+      { regex: /endpoints\.\w+\.enabled\s*[:=]\s*(?:True|true)/gi, languages: ['java'] },
+      // TLS disabled
+      { regex: /(?:verify\s*[:=]\s*False|rejectUnauthorized\s*[:=]\s*false|checkServerIdentity)/gi, languages: ['python', 'javascript'] },
+      // Helmet not used (Express)
+      { regex: /app\.use\s*\((?!.*helmet)/gi, languages: ['javascript'] }
+    ],
+    description: 'Security misconfiguration detected',
+    remediation: 'Disable debug in production, restrict CORS, use HTTPS, validate TLS certificates.'
+  },
+
+  // ── Sensitive Data Exposure (A02) ──
+  sensitive_data_exposure: {
+    severity: 'Medium',
+    owasp: 'A02',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Logging sensitive data
+      { regex: /(?:log|logger|console)\.\w+\s*\([^)]*(?:password|token|secret|ssn|credit_card|api_key)/gi, languages: ['java', 'python', 'javascript'] },
+      // Stack traces exposed
+      { regex: /printStackTrace\s*\(\s*\)/gi, languages: ['java'] },
+      // Error details returned to user
+      { regex: /res\.(?:send|json|status)\s*\([^)]*err(?:or)?\b/gi, languages: ['javascript'] }
+    ],
+    description: 'Potential sensitive data exposure',
+    remediation: 'Never log sensitive data. Return generic error messages to users. Sanitize stack traces.'
+  },
+
+  // ── Missing Auth Check (A01) ──
+  missing_auth: {
+    severity: 'High',
+    owasp: 'A01',
+    languages: ['java', 'python', 'javascript'],
+    patterns: [
+      // Spring: endpoint without @PreAuthorize or @Secured
+      { regex: /@(?:GetMapping|PostMapping|PutMapping|DeleteMapping|RequestMapping)\s*\([^)]*\)[^{]*\{[^}]*(?:delete|remove|admin|update|modify)/gi, languages: ['java'] },
+      // Express: route without auth middleware
+      { regex: /app\.(?:get|post|put|delete|patch)\s*\(\s*["']\/api\/(?:admin|manage|config|user)/gi, languages: ['javascript'] },
+      // Flask: route without @login_required
+      { regex: /@app\.route\s*\([^)]*(?:admin|delete|manage|config)/gi, languages: ['python'] }
+    ],
+    description: 'Endpoint may lack proper authorization — verify access controls',
+    remediation: 'Implement proper authentication and authorization checks. Use middleware/decorators consistently.'
+  }
+};
+
+/**
+ * Detect the programming language from code content (if not specified).
+ */
+function detectLanguage(code) {
+  // Java indicators
+  if (/\b(?:public\s+class|private\s+\w+\s+\w+|System\.out\.print|import\s+java\.|@Override|@Autowired|@RestController)\b/.test(code)) {
+    return 'java';
+  }
+  // Python indicators
+  if (/\b(?:def\s+\w+\(|import\s+\w+|from\s+\w+\s+import|if\s+__name__|self\.|@app\.route|print\s*\(|lambda\s)/.test(code)) {
+    return 'python';
+  }
+  // JavaScript indicators
+  if (/\b(?:const\s|let\s|var\s|function\s|=>\s*|require\s*\(|module\.exports|async\s+function|app\.(?:get|post|use)|res\.(?:send|json))\b/.test(code)) {
+    return 'javascript';
+  }
+  return 'javascript'; // default
+}
+
+/**
+ * Run all rules against the code and collect findings.
+ */
+function analyzeCode(code, language) {
+  const findings = [];
+  const codeLines = code.split('\n');
+
+  for (const [ruleId, rule] of Object.entries(RULES)) {
+    // Check if rule applies to this language
+    if (!rule.languages.includes(language)) continue;
+
+    for (const patternDef of rule.patterns) {
+      // Check if this specific pattern targets this language
+      if (patternDef.languages && !patternDef.languages.includes(language)) continue;
+
+      const regex = patternDef.regex;
+      let match;
+
+      // Reset regex state
+      regex.lastIndex = 0;
+
+      while ((match = regex.exec(code)) !== null) {
+        // Find the line number
+        const beforeMatch = code.substring(0, match.index);
+        const lineNumber = (beforeMatch.match(/\n/g) || []).length + 1;
+        const matchedText = match[0].trim();
+
+        // Skip if the matched text is in a comment
+        const lineContent = codeLines[lineNumber - 1]?.trim() || '';
+        if (lineContent.startsWith('//') || lineContent.startsWith('#') || lineContent.startsWith('/*') || lineContent.startsWith('*')) {
+          continue;
+        }
+
+        findings.push({
+          ruleId,
+          severity: rule.severity,
+          owasp: rule.owasp,
+          line: lineNumber,
+          lineContent: lineContent.substring(0, 100),
+          matched: matchedText.substring(0, 80),
+          description: rule.description,
+          remediation: rule.remediation
+        });
+      }
+    }
+  }
+
+  // Deduplicate findings on same line + rule
+  const seen = new Set();
+  return findings.filter(f => {
+    const key = `${f.ruleId}:${f.line}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Severity emoji.
+ */
+function severityEmoji(s) {
+  return { Critical: '🔴', High: '🟠', Medium: '🟡', Low: '🟢' }[s] || '⚪';
+}
+
+/**
+ * Main result function — entry point for AI Edge Gallery.
+ */
+window['ai_edge_gallery_get_result'] = async (data) => {
+  let parsed;
+  if (typeof data === 'string') {
+    parsed = JSON.parse(data);
+  } else {
+    parsed = data;
+  }
+
+  const code = parsed.code || parsed.snippet || '';
+  let language = (parsed.language || '').toLowerCase().trim();
+
+  if (!code) {
+    return JSON.stringify({ result: 'Error: No code provided for analysis. Pass a "code" field with the source code to analyze.' });
+  }
+
+  // Auto-detect language if not specified
+  if (!language || !['java', 'python', 'javascript'].includes(language)) {
+    language = detectLanguage(code);
+  }
+
+  // Map aliases
+  if (language === 'js' || language === 'typescript' || language === 'ts' || language === 'node' || language === 'nodejs') {
+    language = 'javascript';
+  }
+  if (language === 'py') language = 'python';
+  if (language === 'spring' || language === 'kotlin' || language === 'scala') language = 'java';
+
+  // Run analysis
+  const findings = analyzeCode(code, language);
+
+  // Count by severity
+  const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+  findings.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+
+  // Build output
+  const lines = [];
+  lines.push('╔══════════════════════════════════════════════════╗');
+  lines.push('║        🛡️ SAST CODE REVIEW RESULTS              ║');
+  lines.push('╚══════════════════════════════════════════════════╝');
+  lines.push('');
+  lines.push(`  Language: ${language.charAt(0).toUpperCase() + language.slice(1)}`);
+  lines.push(`  Lines of code: ${code.split('\n').length}`);
+  lines.push(`  Findings: ${findings.length}`);
+  lines.push('');
+
+  // Summary
+  lines.push('── 📊 Severity Summary ──');
+  lines.push(`  🔴 Critical: ${counts.Critical}`);
+  lines.push(`  🟠 High:     ${counts.High}`);
+  lines.push(`  🟡 Medium:   ${counts.Medium}`);
+  lines.push(`  🟢 Low:      ${counts.Low}`);
+  lines.push('');
+
+  if (findings.length === 0) {
+    lines.push('  ✅ No security issues detected by pattern matching.');
+    lines.push('  Note: This is a heuristic scan. Manual review is still recommended.');
+    lines.push('');
+    lines.push('── 💡 General Security Recommendations ──');
+    lines.push('  • Always validate and sanitize user input');
+    lines.push('  • Use parameterized queries for database access');
+    lines.push('  • Implement proper authentication and authorization');
+    lines.push('  • Keep dependencies up to date');
+    lines.push('  • Use HTTPS everywhere');
+    lines.push('  • Follow the principle of least privilege');
+    lines.push('  • Implement proper error handling (no stack traces to users)');
+    return JSON.stringify({ result: lines.join('\n') });
+  }
+
+  // Detailed Findings
+  lines.push('── 🔍 Detailed Findings ──');
+  lines.push('');
+
+  // Sort by severity (Critical first)
+  const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+  const sortedFindings = [...findings].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
+  sortedFindings.forEach((f, idx) => {
+    const owaspInfo = OWASP[f.owasp] || { id: f.owasp, name: 'Unknown' };
+    lines.push(`  ${severityEmoji(f.severity)} Finding #${idx + 1} [${f.severity}]`);
+    lines.push(`     OWASP: ${owaspInfo.id} — ${owaspInfo.name}`);
+    lines.push(`     Line ${f.line}: ${f.lineContent || f.matched}`);
+    lines.push(`     Issue: ${f.description}`);
+    lines.push(`     Fix: ${f.remediation}`);
+    lines.push('');
+  });
+
+  // OWASP Coverage
+  lines.push('── 📋 OWASP Top 10 Categories Affected ──');
+  const affectedCategories = [...new Set(findings.map(f => f.owasp))];
+  affectedCategories.forEach(cat => {
+    const info = OWASP[cat] || { id: cat, name: 'Unknown' };
+    const catFindings = findings.filter(f => f.owasp === cat);
+    lines.push(`  • ${info.id}: ${info.name} (${catFindings.length} finding${catFindings.length > 1 ? 's' : ''})`);
+  });
+  lines.push('');
+
+  // Overall Risk Assessment
+  lines.push('── ⚠️ Overall Risk Assessment ──');
+  let riskLevel;
+  if (counts.Critical > 0) {
+    riskLevel = 'CRITICAL — Immediate action required';
+    lines.push(`  🔴 ${riskLevel}`);
+    lines.push('  Critical vulnerabilities found that could lead to system compromise.');
+  } else if (counts.High > 0) {
+    riskLevel = 'HIGH — Address promptly';
+    lines.push(`  🟠 ${riskLevel}`);
+    lines.push('  High-severity issues detected that pose significant security risk.');
+  } else if (counts.Medium > 0) {
+    riskLevel = 'MEDIUM — Plan remediation';
+    lines.push(`  🟡 ${riskLevel}`);
+    lines.push('  Medium-severity issues found. Remediate within the current sprint.');
+  } else {
+    riskLevel = 'LOW — Minor issues';
+    lines.push(`  🟢 ${riskLevel}`);
+    lines.push('  Only low-severity issues detected. Address during maintenance.');
+  }
+  lines.push('');
+  lines.push('  ⚠️ Note: This is automated pattern-based analysis. It may produce');
+  lines.push('  false positives and false negatives. Manual code review and');
+  lines.push('  professional SAST tools (SonarQube, Checkmarx, Snyk) are recommended');
+
+  return JSON.stringify({ result: lines.join('\n') });
+};
+</script>
+</head>
+<body>
+<p>SAST Code Reviewer — loaded and ready.</p>
+</body>
+</html>

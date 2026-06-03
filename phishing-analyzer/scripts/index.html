@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phishing Analyzer</title>
+<script>
+/**
+ * Phishing Analyzer — Analyzes suspicious emails for phishing indicators.
+ * Parses headers, extracts URLs, checks content patterns, computes risk score.
+ */
+
+// ── Suspicious TLDs commonly used in phishing ──
+const SUSPICIOUS_TLDS = new Set([
+  'tk','ml','ga','cf','gq','xyz','top','pw','cc','ws','club','work',
+  'party','trade','date','loan','men','stream','download','racing',
+  'win','bid','ren','science','accountant','buzz','icu','info'
+]);
+
+// ── Known URL shorteners ──
+const URL_SHORTENERS = new Set([
+  'bit.ly','t.co','tinyurl.com','goo.gl','ow.ly','is.gd','buff.ly',
+  'rebrand.ly','shorte.st','adf.ly','bit.do','mcaf.ee','db.tt','qr.ae'
+]);
+
+// ── Urgency/pressure keywords ──
+const URGENCY_KEYWORDS = [
+  'urgent','immediately','asap','expire','expiration','suspended',
+  'suspend','verify','verification','unauthorized','unusual activity',
+  'compromised','security alert','account locked','account disabled',
+  'action required','final notice','last warning','deactivated',
+  'click here','click below','respond within','failure to',
+  'your account will be','limited time','act now','act immediately'
+];
+
+// ── Generic greeting patterns ──
+const GENERIC_GREETINGS = [
+  'dear customer','dear user','dear member','dear client',
+  'dear account holder','dear valued customer','dear valued member',
+  'dear sir','dear madam','to whom it may concern','hello user',
+  'dear subscriber','hi customer','hi user'
+];
+
+// ── Legitimate sender domains for comparison ──
+const COMMON_SERVICES = [
+  'google.com','microsoft.com','apple.com','amazon.com','paypal.com',
+  'ebay.com','netflix.com','facebook.com','instagram.com','twitter.com',
+  'linkedin.com','github.com','dropbox.com','spotify.com',
+  'gmail.com','outlook.com','yahoo.com','mail.google.com',
+  'accounts.google.com','login.microsoftonline.com'
+];
+
+/**
+ * Parse raw email into headers and body.
+ */
+function parseRawEmail(raw) {
+  const headerBlockEnd = raw.indexOf('\n\n');
+  let headerSection, body;
+
+  if (headerBlockEnd !== -1) {
+    headerSection = raw.substring(0, headerBlockEnd);
+    body = raw.substring(headerBlockEnd + 2);
+  } else {
+    // Try to find boundary between headers and body
+    const lines = raw.split('\n');
+    let splitIndex = lines.length;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === '' && i > 0) {
+        splitIndex = i;
+        break;
+      }
+    }
+    headerSection = lines.slice(0, splitIndex).join('\n');
+    body = lines.slice(splitIndex + 1).join('\n');
+  }
+
+  // Parse headers (handle folded headers — continuation lines starting with whitespace)
+  const headers = {};
+  const headerLines = headerSection.split('\n');
+  let currentKey = '';
+
+  for (const line of headerLines) {
+    if (/^\s/.test(line) && currentKey) {
+      // Continuation of previous header
+      headers[currentKey] += ' ' + line.trim();
+    } else {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0) {
+        currentKey = line.substring(0, colonIdx).trim().toLowerCase();
+        const value = line.substring(colonIdx + 1).trim();
+        // Handle multiple headers with same key
+        if (headers[currentKey]) {
+          headers[currentKey] += '\n' + value;
+        } else {
+          headers[currentKey] = value;
+        }
+      }
+    }
+  }
+
+  return { headers, body };
+}
+
+/**
+ * Extract email address from a From/Reply-To header value.
+ */
+function extractEmailAddress(headerValue) {
+  if (!headerValue) return null;
+  // Match email in angle brackets, or bare email
+  const bracketMatch = headerValue.match(/<([^>]+)>/);
+  if (bracketMatch) return bracketMatch[1].trim().toLowerCase();
+  const bareMatch = headerValue.match(/[\w.+-]+@[\w.-]+\.\w+/);
+  if (bareMatch) return bareMatch[0].toLowerCase();
+  return null;
+}
+
+/**
+ * Extract display name from From header.
+ */
+function extractDisplayName(headerValue) {
+  if (!headerValue) return null;
+  const bracketMatch = headerValue.match(/^"?(.+?)"?\s*</);
+  if (bracketMatch) return bracketMatch[1].trim();
+  return headerValue.split('@')[0].trim();
+}
+
+/**
+ * Decode Base64 body content.
+ */
+function decodeBase64Body(body) {
+  // Check for base64 encoded sections
+  const b64Match = body.match(/Content-Transfer-Encoding:\s*base64\s*\n\s*\n([A-Za-z0-9+/=\s]+)/i);
+  if (b64Match) {
+    try {
+      const decoded = atob(b64Match[1].replace(/\s/g, ''));
+      // Try to interpret as UTF-8
+      const bytes = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
+      return new TextDecoder().decode(bytes);
+    } catch (e) {
+      return body;
+    }
+  }
+
+  // Check if entire body looks base64
+  const stripped = body.replace(/\s/g, '');
+  if (/^[A-Za-z0-9+/=]+$/.test(stripped) && stripped.length > 20) {
+    try {
+      const decoded = atob(stripped);
+      const bytes = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
+      return new TextDecoder().decode(bytes);
+    } catch (e) {
+      return body;
+    }
+  }
+
+  return body;
+}
+
+/**
+ * Extract URLs from text.
+ */
+function extractURLs(text) {
+  const urlRegex = /https?:\/\/[^\s<>"')\]]+/gi;
+  return [...new Set((text.match(urlRegex) || []))];
+}
+
+/**
+ * Check for homograph attacks (lookalike characters in domains).
+ */
+function checkHomographAttack(domain) {
+  // Check for mixed scripts (Cyrillic lookalikes for Latin)
+  const cyrillicLookalikes = /[а-я]/i;
+  const latinChars = /[a-z]/i;
+  if (cyrillicLookalikes.test(domain) && latinChars.test(domain)) {
+    return true;
+  }
+
+  // Check for confusable characters
+  const confusables = /[0OoΟο][0OoΟο]|[1lIι][1lIι]|[rn][rn]/;
+  if (confusables.test(domain)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Parse SPF/DKIM/DMARC authentication results.
+ */
+function parseAuthResults(authHeader) {
+  const results = { spf: null, dkim: null, dmarc: null };
+
+  if (!authHeader) return results;
+
+  const spfMatch = authHeader.match(/spf=(\w+)/i);
+  if (spfMatch) results.spf = spfMatch[1].toLowerCase();
+
+  const dkimMatch = authHeader.match(/dkim=(\w+)/i);
+  if (dkimMatch) results.dkim = dkimMatch[1].toLowerCase();
+
+  const dmarcMatch = authHeader.match(/dmarc=(\w+)/i);
+  if (dmarcMatch) results.dmarc = dmarcMatch[1].toLowerCase();
+
+  return results;
+}
+
+/**
+ * Main result function — entry point for AI Edge Gallery.
+ */
+window['ai_edge_gallery_get_result'] = async (data) => {
+  let parsed;
+  if (typeof data === 'string') {
+    parsed = JSON.parse(data);
+  } else {
+    parsed = data;
+  }
+
+  // Support both raw email and pre-parsed input
+  let headers, body;
+  if (parsed.email_raw) {
+    const parsed_email = parseRawEmail(parsed.email_raw);
+    headers = parsed_email.headers;
+    body = parsed_email.body;
+  } else {
+    headers = parsed.headers || {};
+    body = parsed.body || '';
+  }
+
+  // Decode body if base64
+  const decodedBody = decodeBase64Body(body);
+  const fullBodyText = body + '\n' + decodedBody;
+
+  // ── Risk Scoring Components ──
+  let riskScore = 0;
+  const maxScore = 100;
+  const findings = {
+    header: [],
+    url: [],
+    content: [],
+    authentication: [],
+    sender: []
+  };
+
+  // ══ HEADER ANALYSIS ══
+  const fromAddr = extractEmailAddress(headers['from'] || '');
+  const replyToAddr = extractEmailAddress(headers['reply-to'] || '');
+  const fromDisplay = extractDisplayName(headers['from'] || '');
+  const messageId = headers['message-id'] || '';
+  const receivedHeaders = headers['received'] || '';
+
+  // Check From/Reply-To mismatch
+  if (fromAddr && replyToAddr && fromAddr !== replyToAddr) {
+    riskScore += 15;
+    findings.header.push({
+      severity: 'High',
+      detail: `From/Reply-To mismatch: From=${fromAddr}, Reply-To=${replyToAddr}`
+    });
+  }
+
+  // Check sender domain against common services
+  if (fromAddr) {
+    const fromDomain = fromAddr.split('@')[1];
+    if (fromDomain) {
+      // Check if display name claims to be a service but domain doesn't match
+      for (const service of COMMON_SERVICES) {
+        const serviceName = service.split('.')[0].toLowerCase();
+        if (fromDisplay && fromDisplay.toLowerCase().includes(serviceName) &&
+            !fromDomain.toLowerCase().endsWith(service)) {
+          riskScore += 20;
+          findings.sender.push({
+            severity: 'Critical',
+            detail: `Display name "${fromDisplay}" impersonates ${service} but domain is ${fromDomain}`
+          });
+          break;
+        }
+      }
+
+      // Homograph check on sender domain
+      if (checkHomographAttack(fromDomain)) {
+        riskScore += 18;
+        findings.sender.push({
+          severity: 'Critical',
+          detail: `Sender domain ${fromDomain} may contain homograph/lookalike characters`
+        });
+      }
+
+      // Suspicious TLD check
+      const tld = fromDomain.split('.').pop().toLowerCase();
+      if (SUSPICIOUS_TLDS.has(tld)) {
+        riskScore += 8;
+        findings.sender.push({
+          severity: 'Medium',
+          detail: `Sender uses suspicious TLD: .${tld}`
+        });
+      }
+    }
+  }
+
+  // Message-ID analysis
+  if (!messageId) {
+    riskScore += 5;
+    findings.header.push({
+      severity: 'Low',
+      detail: 'Missing Message-ID header'
+    });
+  }
+
+  // Received chain analysis — check for suspicious relay patterns
+  if (receivedHeaders) {
+    const receivedIPs = receivedHeaders.match(/\d+\.\d+\.\d+\.\d+/g) || [];
+    if (receivedIPs.length === 1 && fromAddr) {
+      riskScore += 3;
+      findings.header.push({
+        severity: 'Low',
+        detail: 'Only one Received hop — possibly direct send from a compromised host'
+      });
+    }
+  }
+
+  // ══ AUTHENTICATION ANALYSIS ══
+  const authHeader = headers['authentication-results'] || headers['arc-authentication-results'] || '';
+  const authResults = parseAuthResults(authHeader);
+
+  if (authResults.spf === 'fail' || authResults.spf === 'softfail') {
+    riskScore += 12;
+    findings.authentication.push({
+      severity: 'High',
+      detail: `SPF: ${authResults.spf.toUpperCase()} — sender not authorized`
+    });
+  } else if (authResults.spf === 'pass') {
+    findings.authentication.push({ severity: 'Info', detail: 'SPF: PASS ✅' });
+  } else if (!authResults.spf && !authHeader) {
+    riskScore += 7;
+    findings.authentication.push({
+      severity: 'Medium',
+      detail: 'No SPF record found in headers'
+    });
+  }
+
+  if (authResults.dkim === 'fail') {
+    riskScore += 10;
+    findings.authentication.push({
+      severity: 'High',
+      detail: 'DKIM: FAIL — signature verification failed'
+    });
+  } else if (authResults.dkim === 'pass') {
+    findings.authentication.push({ severity: 'Info', detail: 'DKIM: PASS ✅' });
+  } else if (!authResults.dkim && !authHeader) {
+    riskScore += 5;
+    findings.authentication.push({
+      severity: 'Medium',
+      detail: 'No DKIM signature found'
+    });
+  }
+
+  if (authResults.dmarc === 'fail') {
+    riskScore += 10;
+    findings.authentication.push({
+      severity: 'High',
+      detail: 'DMARC: FAIL — policy rejection'
+    });
+  } else if (authResults.dmarc === 'pass') {
+    findings.authentication.push({ severity: 'Info', detail: 'DMARC: PASS ✅' });
+  }
+
+  // ══ URL ANALYSIS ══
+  const urls = extractURLs(fullBodyText);
+
+  for (const url of urls) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+
+      // IP-based URL
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+        riskScore += 12;
+        findings.url.push({
+          severity: 'High',
+          detail: `IP-based URL: ${url}`
+        });
+      }
+
+      // Suspicious TLD
+      const urlTld = hostname.split('.').pop();
+      if (SUSPICIOUS_TLDS.has(urlTld)) {
+        riskScore += 8;
+        findings.url.push({
+          severity: 'Medium',
+          detail: `Suspicious TLD in URL: .${urlTld} (${url})`
+        });
+      }
+
+      // URL shortener
+      if (URL_SHORTENERS.has(hostname)) {
+        riskScore += 5;
+        findings.url.push({
+          severity: 'Medium',
+          detail: `URL shortener detected: ${hostname}`
+        });
+      }
+
+      // Homograph attack
+      if (checkHomographAttack(hostname)) {
+        riskScore += 15;
+        findings.url.push({
+          severity: 'Critical',
+          detail: `Possible homograph attack in URL: ${hostname}`
+        });
+      }
+
+      // Mismatch between display text and actual URL
+      // Check if URL claims to be a service but domain doesn't match
+      for (const service of COMMON_SERVICES) {
+        if (url.toLowerCase().includes(service) && !hostname.endsWith(service)) {
+          riskScore += 10;
+          findings.url.push({
+            severity: 'High',
+            detail: `URL appears to reference ${service} but goes to ${hostname}`
+          });
+          break;
+        }
+      }
+
+      // Excessive subdomains
+      const parts = hostname.split('.');
+      if (parts.length > 4) {
+        riskScore += 3;
+        findings.url.push({
+          severity: 'Low',
+          detail: `Excessive subdomains in: ${hostname}`
+        });
+      }
+    } catch (e) {
+      // Invalid URL
+    }
+  }
+
+  // ══ CONTENT ANALYSIS ══
+  const lowerBody = fullBodyText.toLowerCase();
+
+  // Urgency language
+  let urgencyCount = 0;
+  for (const keyword of URGENCY_KEYWORDS) {
+    if (lowerBody.includes(keyword.toLowerCase())) {
+      urgencyCount++;
+    }
+  }
+  if (urgencyCount >= 4) {
+    riskScore += 15;
+    findings.content.push({
+      severity: 'High',
+      detail: `Heavy urgency language detected (${urgencyCount} indicators)`
+    });
+  } else if (urgencyCount >= 2) {
+    riskScore += 8;
+    findings.content.push({
+      severity: 'Medium',
+      detail: `Urgency language detected (${urgencyCount} indicators)`
+    });
+  }
+
+  // Generic greetings
+  for (const greeting of GENERIC_GREETINGS) {
+    if (lowerBody.includes(greeting)) {
+      riskScore += 6;
+      findings.content.push({
+        severity: 'Medium',
+        detail: `Generic greeting: "${greeting}"`
+      });
+      break;
+    }
+  }
+
+  // Requests for sensitive info
+  const sensitivePatterns = [
+    { pattern: /password/i, label: 'Password request' },
+    { pattern: /social\s+security|ssn/i, label: 'SSN request' },
+    { pattern: /credit\s+card|cc\s*number/i, label: 'Credit card request' },
+    { pattern: /bank\s+account/i, label: 'Bank account request' },
+    { pattern: /date\s+of\s+birth|dob/i, label: 'Date of birth request' },
+    { pattern: /verify.*identity/i, label: 'Identity verification request' },
+    { pattern: /update.*information/i, label: 'Information update request' }
+  ];
+
+  for (const sp of sensitivePatterns) {
+    if (sp.pattern.test(fullBodyText)) {
+      riskScore += 5;
+      findings.content.push({
+        severity: 'Medium',
+        detail: sp.label
+      });
+    }
+  }
+
+  // Attachment indicators
+  if (/\.(exe|scr|zip|js|vbs|bat|cmd|ps1|docm|xlsm|pptm)/i.test(fullBodyText)) {
+    riskScore += 8;
+    findings.content.push({
+      severity: 'High',
+      detail: 'Suspicious attachment type referenced in email'
+    });
+  }
+
+  // Cap the score
+  riskScore = Math.min(riskScore, maxScore);
+
+  // Determine overall verdict
+  let verdict, emoji;
+  if (riskScore >= 70) { verdict = 'HIGH RISK — Likely Phishing'; emoji = '🔴'; }
+  else if (riskScore >= 40) { verdict = 'MEDIUM RISK — Suspicious'; emoji = '🟠'; }
+  else if (riskScore >= 20) { verdict = 'LOW RISK — Some Indicators'; emoji = '🟡'; }
+  else { verdict = 'MINIMAL RISK — Appears Legitimate'; emoji = '🟢'; }
+
+  // ── Format Output ──
+  const lines = [];
+  lines.push('╔══════════════════════════════════════════════════╗');
+  lines.push('║         🎣 PHISHING ANALYSIS RESULTS            ║');
+  lines.push('╚══════════════════════════════════════════════════╝');
+  lines.push('');
+  lines.push(`  ${emoji} Risk Score: ${riskScore}/100`);
+  lines.push(`  Verdict: ${verdict}`);
+  lines.push('');
+
+  // Sender Info
+  lines.push('── 📩 Sender Information ──');
+  lines.push(`  From: ${headers['from'] || 'N/A'}`);
+  if (replyToAddr) lines.push(`  Reply-To: ${headers['reply-to']}`);
+  lines.push(`  Message-ID: ${messageId || 'Missing'}`);
+  lines.push('');
+
+  // Authentication
+  lines.push('── 🔒 Authentication Results ──');
+  findings.authentication.forEach(f => {
+    lines.push(`  ${f.severity === 'Info' ? '✅' : '⚠️'} ${f.detail}`);
+  });
+  if (findings.authentication.length === 0) {
+    lines.push('  ℹ️  No authentication headers found');
+  }
+  lines.push('');
+
+  // URL Analysis
+  lines.push('── 🔗 URL Analysis ──');
+  if (urls.length > 0) {
+    lines.push(`  Found ${urls.length} URL(s):`);
+    urls.forEach(url => {
+      lines.push(`    • ${url}`);
+    });
+  } else {
+    lines.push('  No URLs found in email body');
+  }
+  findings.url.forEach(f => {
+    lines.push(`  ${f.severity === 'Critical' ? '🔴' : f.severity === 'High' ? '🟠' : '🟡'} ${f.detail}`);
+  });
+  lines.push('');
+
+  // Header Findings
+  if (findings.header.length > 0) {
+    lines.push('── 📋 Header Analysis ──');
+    findings.header.forEach(f => {
+      lines.push(`  ⚠️ ${f.detail}`);
+    });
+    lines.push('');
+  }
+
+  // Sender Findings
+  if (findings.sender.length > 0) {
+    lines.push('── 👤 Sender Analysis ──');
+    findings.sender.forEach(f => {
+      lines.push(`  ${f.severity === 'Critical' ? '🔴' : '🟠'} ${f.detail}`);
+    });
+    lines.push('');
+  }
+
+  // Content Findings
+  if (findings.content.length > 0) {
+    lines.push('── 📝 Content Analysis ──');
+    findings.content.forEach(f => {
+      lines.push(`  ${f.severity === 'High' ? '🟠' : '🟡'} ${f.detail}`);
+    });
+    lines.push('');
+  }
+
+  // Recommendations
+  lines.push('── 💡 Recommendations ──');
+  if (riskScore >= 70) {
+    lines.push('  1. 🚨 DO NOT click any links or download attachments');
+    lines.push('  2. 🚨 DO NOT reply with any personal information');
+    lines.push('  3. Report this email to your security team');
+    lines.push('  4. If you already clicked a link, disconnect and run a malware scan');
+    lines.push('  5. Change passwords for any accounts that may be compromised');
+  } else if (riskScore >= 40) {
+    lines.push('  1. Verify the sender through an independent channel');
+    lines.push('  2. Hover over links before clicking to check destinations');
+    lines.push('  3. Do not provide sensitive information via email');
+    lines.push('  4. Consider reporting to your security team');
+  } else if (riskScore >= 20) {
+    lines.push('  1. Exercise caution — some phishing indicators present');
+    lines.push('  2. Verify the sender if anything seems unusual');
+    lines.push('  3. Check links before clicking');
+  } else {
+    lines.push('  1. Email appears legitimate but always stay vigilant');
+    lines.push('  2. Verify unexpected requests through alternate channels');
+  }
+
+  return JSON.stringify({ result: lines.join('\n') });
+};
+</script>
+</head>
+<body>
+<p>Phishing Analyzer — loaded and ready.</p>
+</body>
+</html>

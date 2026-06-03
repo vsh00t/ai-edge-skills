@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Compliance Check</title></head><body>
+<script>
+window['ai_edge_gallery_get_result'] = async (data) => {
+  try {
+    const input = JSON.parse(data);
+    const standard = (input.standard || input.framework || 'iso27001').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const answers = input.answers || {};
+    
+    const standards = {
+      iso27001: {
+        name: 'ISO/IEC 27001:2022',
+        controls: [
+          { id: 'A.5.1', q: 'Are information security policies approved by management and communicated?', cat: 'Organizational' },
+          { id: 'A.5.2', q: 'Are information security roles and responsibilities defined and assigned?', cat: 'Organizational' },
+          { id: 'A.5.3', q: 'Is segregation of duties implemented for conflicting responsibilities?', cat: 'Organizational' },
+          { id: 'A.5.7', q: 'Is there a threat intelligence process for identifying emerging threats?', cat: 'Organizational' },
+          { id: 'A.5.8', q: 'Is information security addressed in project management?', cat: 'Organizational' },
+          { id: 'A.5.10', q: 'Are acceptable use policies for information assets established?', cat: 'Organizational' },
+          { id: 'A.5.14', q: 'Is information transfer protected with appropriate controls?', cat: 'Organizational' },
+          { id: 'A.6.1', q: 'Is screening performed on personnel before employment?', cat: 'People' },
+          { id: 'A.6.3', q: 'Is information security awareness training provided to all staff?', cat: 'People' },
+          { id: 'A.6.5', q: 'Are disciplinary processes defined for security policy violations?', cat: 'People' },
+          { id: 'A.7.1', q: 'Are physical security perimeters defined and protected?', cat: 'Physical' },
+          { id: 'A.7.4', q: 'Is physical access monitored and logged?', cat: 'Physical' },
+          { id: 'A.7.7', q: 'Are clear desk and clear screen policies enforced?', cat: 'Physical' },
+          { id: 'A.8.1', q: 'Is an inventory of all information assets maintained?', cat: 'Technological' },
+          { id: 'A.8.2', q: 'Are all assets assigned ownership?', cat: 'Technological' },
+          { id: 'A.8.5', q: 'Is authentication based on secure technologies (MFA where appropriate)?', cat: 'Technological' },
+          { id: 'A.8.7', q: 'Is protection against malware deployed and updated?', cat: 'Technological' },
+          { id: 'A.8.8', q: 'Is vulnerability management with defined timelines implemented?', cat: 'Technological' },
+          { id: 'A.8.9', q: 'Are network security controls (firewalls, IDS/IPS) in place?', cat: 'Technological' },
+          { id: 'A.8.10', q: 'Is data at rest and in transit encrypted?', cat: 'Technological' },
+          { id: 'A.8.12', q: 'Is data leakage prevention (DLP) implemented?', cat: 'Technological' },
+          { id: 'A.8.15', q: 'Are logging and monitoring systems collecting security events?', cat: 'Technological' },
+          { id: 'A.8.16', q: 'Is backup and recovery tested regularly?', cat: 'Technological' },
+          { id: 'A.8.23', q: 'Is web filtering and URL blocking in use?', cat: 'Technological' },
+          { id: 'A.8.25', q: 'Is secure development lifecycle (SDLC) followed?', cat: 'Technological' }
+        ]
+      },
+      pcidss: {
+        name: 'PCI-DSS v4.0',
+        controls: [
+          { id: 'Req 1', q: 'Are network security controls installed and maintained?', cat: 'Network' },
+          { id: 'Req 2', q: 'Are secure configurations applied to all system components?', cat: 'Config' },
+          { id: 'Req 3', q: 'Is stored account data protected (encryption at rest)?', cat: 'Data' },
+          { id: 'Req 4', q: 'Is cardholder data protected during transmission (encryption in transit)?', cat: 'Data' },
+          { id: 'Req 5', q: 'Is malicious software protection maintained?', cat: 'Malware' },
+          { id: 'Req 6', q: 'Is secure systems and software development in place?', cat: 'Development' },
+          { id: 'Req 7', q: 'Is access to system components restricted by need-to-know?', cat: 'Access' },
+          { id: 'Req 8', q: 'Are user identities and authentication managed (MFA for CDE)?', cat: 'Auth' },
+          { id: 'Req 9', q: 'Is physical access to cardholder data restricted?', cat: 'Physical' },
+          { id: 'Req 10', q: 'Is logging and monitoring of all access to system components in place?', cat: 'Logging' },
+          { id: 'Req 11', q: 'Are regular security tests performed (vuln scans, pen tests)?', cat: 'Testing' },
+          { id: 'Req 12', q: 'Is information security policy maintained and organizational security managed?', cat: 'Policy' }
+        ]
+      },
+      ecuador: {
+        name: 'Ecuador — Ley Orgánica de Protección de Datos Personales',
+        controls: [
+          { id: 'Art 8', q: 'Is there a designated Data Protection Officer (DPO/Encargado)?', cat: 'Gobernanza' },
+          { id: 'Art 10', q: 'Are data subjects informed about data collection purposes?', cat: 'Derechos' },
+          { id: 'Art 12', q: 'Is explicit consent obtained before processing personal data?', cat: 'Consentimiento' },
+          { id: 'Art 15', q: 'Are data processing agreements established with third parties?', cat: 'Contratos' },
+          { id: 'Art 18', q: 'Is data minimization applied (only necessary data collected)?', cat: 'Principios' },
+          { id: 'Art 20', q: 'Is there a records of processing activities (ROPA)?', cat: 'Inventario' },
+          { id: 'Art 25', q: 'Are security measures proportional to data sensitivity implemented?', cat: 'Seguridad' },
+          { id: 'Art 28', q: 'Is there a data breach notification procedure (72-hour requirement)?', cat: 'Incidentes' },
+          { id: 'Art 30', q: 'Are cross-border data transfers controlled and documented?', cat: 'Transferencia' },
+          { id: 'Art 35', q: 'Are data retention limits defined and enforced?', cat: 'Retención' },
+          { id: 'Art 40', q: 'Are data subject rights (access, rectification, deletion) facilitated?', cat: 'Derechos' },
+          { id: 'Art 45', q: 'Is a Privacy Impact Assessment (PIA) conducted for high-risk processing?', cat: 'Evaluación' }
+        ]
+      },
+      colombia: {
+        name: 'Colombia — Ley 1581/2012 (Protección de Datos)',
+        controls: [
+          { id: 'Art 4', q: 'Are personal data processing activities based on lawful grounds?', cat: 'Legalidad' },
+          { id: 'Art 5', q: 'Is data collected for specific, explicit, and legitimate purposes?', cat: 'Finalidad' },
+          { id: 'Art 6', q: 'Is data accurate and kept up to date?', cat: 'Veracidad' },
+          { id: 'Art 7', q: 'Is data adequate, relevant, and not excessive?', cat: 'Proporcionalidad' },
+          { id: 'Art 9', q: 'Is explicit prior authorization obtained from data subjects?', cat: 'Autorización' },
+          { id: 'Art 12', q: 'Are data subjects informed of privacy policy before collection?', cat: 'Información' },
+          { id: 'Art 15', q: 'Are sensitive personal data protections in place (health, biometrics, etc.)?', cat: 'Sensibles' },
+          { id: 'Art 17', q: 'Is there a designated Data Controller (Responsable del Tratamiento)?', cat: 'Gobernanza' },
+          { id: 'Art 18', q: 'Are security measures implemented per industry standards?', cat: 'Seguridad' },
+          { id: 'Art 19', q: 'Is there a data breach notification process to SIC and data subjects?', cat: 'Incidentes' },
+          { id: 'Art 22', q: 'Are data retention periods defined and enforced?', cat: 'Retención' },
+          { id: 'Art 25', q: 'Are international data transfers compliant with SIC requirements?', cat: 'Transferencia' },
+          { id: 'Art 26', q: 'Are audit rights established in data processing contracts?', cat: 'Auditoría' }
+        ]
+      }
+    };
+    
+    // Resolve standard name
+    let stdKey = standard;
+    if (standard.includes('iso') || standard.includes('27001')) stdKey = 'iso27001';
+    else if (standard.includes('pci')) stdKey = 'pcidss';
+    else if (standard.includes('ecuador')) stdKey = 'ecuador';
+    else if (standard.includes('colombia') || standard.includes('1581')) stdKey = 'colombia';
+    
+    const std = standards[stdKey] || standards.iso27001;
+    
+    // If no answers, return the checklist questions
+    if (!input.answers && !input.answer) {
+      let output = `📋 COMPLIANCE CHECKLIST: ${std.name}\n`;
+      output += '═'.repeat(50) + '\n\n';
+      output += 'Answer each question with yes/no/partial/na.\n';
+      output += 'Format: { "standard": "' + stdKey + '", "answers": { "0": "yes", "1": "no", ... } }\n\n';
+      
+      let lastCat = '';
+      std.controls.forEach((c, i) => {
+        if (c.cat !== lastCat) {
+          output += `\n▸ ${c.cat}\n`;
+          lastCat = c.cat;
+        }
+        output += `  [${i}] ${c.id}: ${c.q}\n`;
+      });
+      
+      return JSON.stringify({ result: output });
+    }
+    
+    // Score answers
+    let yes = 0, no = 0, partial = 0, na = 0;
+    const gaps = [];
+    
+    std.controls.forEach((c, i) => {
+      const ans = (answers[i] || answers[c.id] || '').toString().toLowerCase();
+      if (ans === 'yes' || ans === '1' || ans === 'true') { yes++; }
+      else if (ans === 'no' || ans === '0' || ans === 'false') { no++; gaps.push(c); }
+      else if (ans === 'partial' || ans === '2') { partial++; gaps.push(c); }
+      else { na++; gaps.push(c); }
+    });
+    
+    const total = std.controls.length;
+    const applicable = total - na;
+    const score = applicable > 0 ? Math.round(((yes + partial * 0.5) / applicable) * 100) : 0;
+    
+    // Maturity level
+    let maturity = '';
+    if (score >= 90) maturity = '5 — Optimized';
+    else if (score >= 75) maturity = '4 — Managed';
+    else if (score >= 55) maturity = '3 — Defined';
+    else if (score >= 35) maturity = '2 — Developing';
+    else maturity = '1 — Initial';
+    
+    let output = `📊 COMPLIANCE REPORT: ${std.name}\n`;
+    output += '═'.repeat(50) + '\n\n';
+    output += `Overall Score: ${score}%\n`;
+    output += `Maturity Level: ${maturity}\n\n`;
+    
+    // Summary
+    output += '📈 SUMMARY:\n';
+    output += '─'.repeat(30) + '\n';
+    output += `  ✅ Compliant:     ${yes}/${total}\n`;
+    output += `  ⚠️  Partial:       ${partial}/${total}\n`;
+    output += `  ❌ Non-compliant: ${no}/${total}\n`;
+    output += `  ➖ Not assessed:  ${na}/${total}\n`;
+    
+    // Gaps
+    if (gaps.length > 0) {
+      output += `\n🔴 GAPS IDENTIFIED (${gaps.length}):\n`;
+      output += '─'.repeat(30) + '\n';
+      gaps.forEach(g => {
+        output += `  • [${g.id}] ${g.q}\n`;
+        output += `    Category: ${g.cat}\n`;
+      });
+    }
+    
+    // Recommendations
+    output += '\n💡 PRIORITY RECOMMENDATIONS:\n';
+    output += '─'.repeat(30) + '\n';
+    const priorityGaps = gaps.filter(g => g.cat === 'Seguridad' || g.cat === 'Technological' || g.cat === 'Security' || g.cat === 'Data' || g.cat === 'Incidentes');
+    if (priorityGaps.length > 0) {
+      priorityGaps.slice(0, 5).forEach(g => {
+        output += `  1️⃣ [${g.id}] ${g.q}\n`;
+      });
+    } else {
+      gaps.slice(0, 5).forEach(g => {
+        output += `  1️⃣ [${g.id}] ${g.q}\n`;
+      });
+    }
+    
+    return JSON.stringify({ result: output });
+  } catch (e) {
+    return JSON.stringify({ error: `Check failed: ${e.message}` });
+  }
+};
+</script>
+</body></html>

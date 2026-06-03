@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subnet Calculator</title>
+<script>
+/**
+ * Subnet Calculator — Offline network calculator for IP planning and pentest reconnaissance.
+ * Calculates network ranges, generates nmap commands, and supports VLSM subnetting.
+ */
+
+/**
+ * Convert IP string to 32-bit unsigned integer.
+ */
+function ipToInt(ip) {
+  const parts = ip.split('.').map(Number);
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+/**
+ * Convert 32-bit unsigned integer to IP string.
+ */
+function intToIp(num) {
+  return [
+    (num >>> 24) & 0xFF,
+    (num >>> 16) & 0xFF,
+    (num >>> 8) & 0xFF,
+    num & 0xFF
+  ].join('.');
+}
+
+/**
+ * Convert prefix length to subnet mask string.
+ */
+function prefixToMask(prefix) {
+  if (prefix < 0 || prefix > 32) return '0.0.0.0';
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  return intToIp(mask);
+}
+
+/**
+ * Convert subnet mask to prefix length.
+ */
+function maskToPrefix(mask) {
+  const num = ipToInt(mask);
+  let count = 0;
+  for (let i = 31; i >= 0; i--) {
+    if ((num & (1 << i)) !== 0) count++;
+    else break;
+  }
+  return count;
+}
+
+/**
+ * Convert prefix length to wildcard mask string.
+ */
+function prefixToWildcard(prefix) {
+  const mask = prefix === 0 ? 0xFFFFFFFF : (~0 << (32 - prefix)) >>> 0;
+  const wildcard = (~mask) >>> 0;
+  return intToIp(wildcard);
+}
+
+/**
+ * Validate IP address format.
+ */
+function isValidIp(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every(p => {
+    const n = Number(p);
+    return !isNaN(n) && n >= 0 && n <= 255 && p === String(n);
+  });
+}
+
+/**
+ * Parse CIDR notation and return network details.
+ */
+function calculateSubnet(cidr) {
+  // Parse CIDR
+  const match = cidr.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+  if (!match) {
+    return { error: `Invalid CIDR format: ${cidr}. Expected format: 192.168.1.0/24` };
+  }
+
+  const ip = match[1];
+  const prefix = parseInt(match[2], 10);
+
+  if (!isValidIp(ip)) {
+    return { error: `Invalid IP address: ${ip}` };
+  }
+  if (prefix < 0 || prefix > 32) {
+    return { error: `Invalid prefix length: ${prefix}. Must be 0-32.` };
+  }
+
+  const ipInt = ipToInt(ip);
+  const maskInt = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  const networkInt = (ipInt & maskInt) >>> 0;
+  const wildcardInt = (~maskInt) >>> 0;
+  const broadcastInt = (networkInt + wildcardInt) >>> 0;
+
+  const totalHosts = Math.pow(2, 32 - prefix);
+  const usableHosts = prefix >= 31 ? (prefix === 32 ? 1 : 2) : totalHosts - 2;
+  const firstUsableInt = prefix >= 31 ? networkInt : (networkInt + 1) >>> 0;
+  const lastUsableInt = prefix >= 31 ? broadcastInt : (broadcastInt - 1) >>> 0;
+
+  // IP class determination
+  const firstOctet = (ipInt >>> 24) & 0xFF;
+  let ipClass;
+  if (firstOctet < 128) ipClass = 'A';
+  else if (firstOctet < 192) ipClass = 'B';
+  else if (firstOctet < 224) ipClass = 'C';
+  else if (firstOctet < 240) ipClass = 'D (Multicast)';
+  else ipClass = 'E (Reserved)';
+
+  // Network type
+  let networkType = 'Public';
+  if (firstOctet === 10) networkType = 'Private (RFC 1918)';
+  else if (firstOctet === 172 && ((ipInt >>> 16) & 0xFF) >= 16 && ((ipInt >>> 16) & 0xFF) <= 31) networkType = 'Private (RFC 1918)';
+  else if (firstOctet === 192 && ((ipInt >>> 16) & 0xFF) === 168) networkType = 'Private (RFC 1918)';
+  else if (firstOctet === 127) networkType = 'Loopback';
+
+  return {
+    network: intToIp(networkInt),
+    broadcast: intToIp(broadcastInt),
+    subnetMask: intToIp(maskInt),
+    wildcardMask: intToIp(wildcardInt),
+    firstUsable: intToIp(firstUsableInt),
+    lastUsable: intToIp(lastUsableInt),
+    prefix,
+    totalHosts,
+    usableHosts,
+    ipClass,
+    networkType,
+    cidr: `${intToIp(networkInt)}/${prefix}`
+  };
+}
+
+/**
+ * Generate nmap scan commands for the network.
+ */
+function generateNmapCommands(network, prefix) {
+  const target = `${network}/${prefix}`;
+  return {
+    quickScan: `nmap -T4 -F ${target}`,
+    fullPortScan: `nmap -p- -T4 ${target}`,
+    serviceVersion: `nmap -sV -sC -T4 ${target}`,
+    osDetection: `nmap -O -sV -T4 ${target}`,
+    vulnScan: `nmap --script=vuln -T4 ${target}`,
+    stealthScan: `nmap -sS -T2 ${target}`,
+    udpScan: `nmap -sU --top-ports 100 -T4 ${target}`,
+    aggressiveScan: `nmap -A -T4 ${target}`,
+    allPortsNoPing: `nmap -p- -Pn -T4 ${target}`,
+    scriptDefault: `nmap -sC -sV -T4 -oA scan_results ${target}`
+  };
+}
+
+/**
+ * Calculate VLSM subnets — divide a network into smaller subnets.
+ */
+function calculateVLSM(networkInt, originalPrefix, targetPrefix) {
+  if (targetPrefix <= originalPrefix) {
+    return { error: `Target prefix /${targetPrefix} must be larger than original /${originalPrefix}` };
+  }
+  if (targetPrefix > 30) {
+    return { error: `Target prefix /${targetPrefix} is too small (minimum /30 for point-to-point)` };
+  }
+
+  const maskInt = (~0 << (32 - targetPrefix)) >>> 0;
+  const subnets = [];
+  const numSubnets = Math.pow(2, targetPrefix - originalPrefix);
+  const subnetSize = Math.pow(2, 32 - targetPrefix);
+
+  for (let i = 0; i < numSubnets; i++) {
+    const subnetAddr = (networkInt + i * subnetSize) >>> 0;
+    const broadcastAddr = (subnetAddr + subnetSize - 1) >>> 0;
+    const usableHosts = subnetSize - 2;
+
+    subnets.push({
+      index: i + 1,
+      network: intToIp(subnetAddr),
+      broadcast: intToIp(broadcastAddr),
+      firstUsable: intToIp((subnetAddr + 1) >>> 0),
+      lastUsable: intToIp((broadcastAddr - 1) >>> 0),
+      usableHosts,
+      mask: intToIp(maskInt),
+      cidr: `${intToIp(subnetAddr)}/${targetPrefix}`
+    });
+  }
+
+  return subnets;
+}
+
+/**
+ * Format number with commas.
+ */
+function formatNum(n) {
+  return n.toLocaleString();
+}
+
+/**
+ * Main result function — entry point for AI Edge Gallery.
+ */
+window['ai_edge_gallery_get_result'] = async (data) => {
+  let parsed;
+  if (typeof data === 'string') {
+    parsed = JSON.parse(data);
+  } else {
+    parsed = data;
+  }
+
+  const cidr = (parsed.cidr || '').trim();
+  const subnetInto = parsed.subnet_into || 0;
+  const targetPrefix = parsed.target_subnet_prefix || 0;
+
+  if (!cidr) {
+    return JSON.stringify({ result: 'Error: Provide a CIDR notation (e.g., "192.168.1.0/24").' });
+  }
+
+  // Calculate main subnet
+  const subnet = calculateSubnet(cidr);
+  if (subnet.error) {
+    return JSON.stringify({ result: `Error: ${subnet.error}` });
+  }
+
+  const lines = [];
+  lines.push('╔══════════════════════════════════════════════════╗');
+  lines.push('║         🌐 SUBNET CALCULATOR RESULTS            ║');
+  lines.push('╚══════════════════════════════════════════════════╝');
+  lines.push('');
+
+  // Network Details
+  lines.push(`── 📋 Network Details for ${subnet.cidr} ──`);
+  lines.push('');
+  lines.push(`  Input CIDR:       ${cidr}`);
+  lines.push(`  Normalized CIDR:  ${subnet.cidr}`);
+  lines.push(`  IP Class:         ${subnet.ipClass}`);
+  lines.push(`  Network Type:     ${subnet.networkType}`);
+  lines.push('');
+  lines.push(`  Network Address:  ${subnet.network}`);
+  lines.push(`  Broadcast:        ${subnet.broadcast}`);
+  lines.push(`  Subnet Mask:      ${subnet.subnetMask}`);
+  lines.push(`  Wildcard Mask:    ${subnet.wildcardMask}`);
+  lines.push('');
+  lines.push(`  First Usable:     ${subnet.firstUsable}`);
+  lines.push(`  Last Usable:      ${subnet.lastUsable}`);
+  lines.push(`  Usable Hosts:     ${formatNum(subnet.usableHosts)}`);
+  lines.push(`  Total Addresses:  ${formatNum(subnet.totalHosts)}`);
+  lines.push('');
+
+  // Binary representation of mask
+  const maskParts = subnet.subnetMask.split('.').map(Number);
+  const binaryMask = maskParts.map(p => p.toString(2).padStart(8, '0')).join('.');
+  lines.push(`  Mask (binary):    ${binaryMask}`);
+  lines.push('');
+
+  // nmap Commands
+  lines.push('── 🔍 nmap Scan Commands ──');
+  lines.push('');
+  const nmapCmds = generateNmapCommands(subnet.network, subnet.prefix);
+
+  lines.push('  Quick Scan (top 100 ports):');
+  lines.push(`    ${nmapCmds.quickScan}`);
+  lines.push('');
+  lines.push('  Full Port Scan (all 65535 ports):');
+  lines.push(`    ${nmapCmds.fullPortScan}`);
+  lines.push('');
+  lines.push('  Service & Version Detection:');
+  lines.push(`    ${nmapCmds.serviceVersion}`);
+  lines.push('');
+  lines.push('  OS Detection:');
+  lines.push(`    ${nmapCmds.osDetection}`);
+  lines.push('');
+  lines.push('  Vulnerability Scan:');
+  lines.push(`    ${nmapCmds.vulnScan}`);
+  lines.push('');
+  lines.push('  Stealth SYN Scan:');
+  lines.push(`    ${nmapCmds.stealthScan}`);
+  lines.push('');
+  lines.push('  Aggressive Scan:');
+  lines.push(`    ${nmapCmds.aggressiveScan}`);
+  lines.push('');
+  lines.push('  UDP Top 100 Ports:');
+  lines.push(`    ${nmapCmds.udpScan}`);
+  lines.push('');
+  lines.push('  Save All Results:');
+  lines.push(`    ${nmapCmds.scriptDefault}`);
+  lines.push('');
+
+  // VLSM Subnetting
+  const effectiveTargetPrefix = targetPrefix || (subnetInto > 0 ? calculateTargetPrefix(subnet.prefix, subnetInto) : 0);
+
+  if (effectiveTargetPrefix > subnet.prefix) {
+    lines.push(`── 📐 VLSM Subnetting (${subnet.cidr} → /${effectiveTargetPrefix}) ──`);
+    lines.push('');
+
+    const vlsmResult = calculateVLSM(ipToInt(subnet.network), subnet.prefix, effectiveTargetPrefix);
+
+    if (vlsmResult.error) {
+      lines.push(`  ⚠️ ${vlsmResult.error}`);
+    } else {
+      const numSubnets = vlsmResult.length;
+      const hostsPerSubnet = vlsmResult[0].usableHosts;
+      lines.push(`  Dividing into ${numSubnets} subnets of ${formatNum(hostsPerSubnet)} hosts each`);
+      lines.push('');
+
+      // Show up to 16 subnets, then summarize
+      const maxShow = Math.min(vlsmResult.length, 16);
+      for (let i = 0; i < maxShow; i++) {
+        const s = vlsmResult[i];
+        lines.push(`  Subnet ${s.index}:`);
+        lines.push(`    CIDR:     ${s.cidr}`);
+        lines.push(`    Range:    ${s.firstUsable} — ${s.lastUsable}`);
+        lines.push(`    Broadcast: ${s.broadcast}`);
+        lines.push(`    Hosts:    ${formatNum(s.usableHosts)}`);
+        lines.push('');
+      }
+      if (vlsmResult.length > maxShow) {
+        lines.push(`  ... and ${vlsmResult.length - maxShow} more subnets`);
+        lines.push('');
+      }
+
+      // Show combined nmap for all subnets
+      lines.push('  Scan all subnets:');
+      const allSubnetTargets = vlsmResult.map(s => s.cidr).join(' ');
+      lines.push(`    nmap -sV -T4 ${allSubnetTargets}`);
+      lines.push('');
+    }
+  } else if (subnetInto > 0 && !targetPrefix) {
+    lines.push(`  ℹ️  To divide into ${subnetInto} subnets, set target_subnet_prefix to /${calculateTargetPrefix(subnet.prefix, subnetInto)}`);
+    lines.push('');
+  }
+
+  // Quick reference
+  lines.push('── 📖 CIDR Quick Reference ──');
+  lines.push('');
+  lines.push('  /32 — Single host');
+  lines.push('  /31 — Point-to-point link (2 hosts)');
+  lines.push('  /30 — Point-to-point (2 usable)');
+  lines.push('  /29 — Small network (6 usable)');
+  lines.push('  /28 — Small office (14 usable)');
+  lines.push('  /27 — Medium subnet (30 usable)');
+  lines.push('  /26 — Large subnet (62 usable)');
+  lines.push('  /25 — Half Class C (126 usable)');
+  lines.push('  /24 — Class C (254 usable)');
+  lines.push('  /16 — Class B (65,534 usable)');
+  lines.push('  /8  — Class A (16,777,214 usable)');
+
+  return JSON.stringify({ result: lines.join('\n') });
+};
+
+/**
+ * Calculate target prefix to achieve a desired number of subnets.
+ */
+function calculateTargetPrefix(originalPrefix, numSubnets) {
+  const bitsNeeded = Math.ceil(Math.log2(numSubnets));
+  return originalPrefix + bitsNeeded;
+}
+</script>
+</head>
+<body>
+<p>Subnet Calculator — loaded and ready.</p>
+</body>
+</html>

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Incident Response</title></head><body>
+<script>
+window['ai_edge_gallery_get_result'] = async (data) => {
+  try {
+    const input = JSON.parse(data);
+    const incidentType = (input.type || input.incident || 'ransomware').toLowerCase().replace(/[^a-z]/g, '');
+    const phase = (input.phase || 'all').toLowerCase();
+    const format = input.format || 'checklist';
+    
+    const playbooks = {
+      ransomware: {
+        name: 'Ransomware Attack',
+        icon: '🔐',
+        severity: 'CRITICAL',
+        phases: [
+          { name: '1. PREPARATION', actions: [
+            '☐ Maintain offline, tested backups (3-2-1 rule)',
+            '☐ Deploy EDR/XDR on all endpoints',
+            '☐ Establish ransomware-specific incident response team',
+            '☐ Document critical assets and their recovery priority',
+            '☐ Test restoration procedures quarterly',
+            '☐ Implement network segmentation',
+            '☐ Deploy email filtering and sandboxing',
+            '☐ Train staff on phishing recognition'
+          ]},
+          { name: '2. IDENTIFICATION', actions: [
+            '☐ Identify affected systems and scope of encryption',
+            '☐ Determine ransomware variant (check ransom note, file extensions)',
+            '☐ Identify initial infection vector (email, RDP, vulnerability)',
+            '☐ Check for data exfiltration indicators (large outbound transfers)',
+            '☐ Identify the ransomware group (check ID Ransomware)',
+            '☐ Document timeline: first infection, spread, detection',
+            '☐ Assess impact: operational, financial, reputational',
+            '☐ Determine if backup systems are affected'
+          ]},
+          { name: '3. CONTAINMENT', actions: [
+            '🔴 IMMEDIATE: Isolate affected systems from network',
+            '🔴 IMMEDIATE: Disable compromised accounts',
+            '☐ Block C2 domains/IPs at firewall and DNS',
+            '☐ Disable RDP and lateral movement paths',
+            '☐ Preserve volatile evidence before shutdown',
+            '☐ Capture memory dumps from infected systems',
+            '☐ Segment network to prevent further spread',
+            '☐ Implement enhanced monitoring on unaffected systems'
+          ]},
+          { name: '4. ERADICATION', actions: [
+            '☐ Remove malware from all affected systems',
+            '☐ Identify and eliminate persistence mechanisms',
+            '☐ Patch the initial entry vulnerability',
+            '☐ Reset all compromised credentials',
+            '☐ Revoke and reissue digital certificates if needed',
+            '☐ Clean or rebuild systems from known-good images',
+            '☐ Verify no dormant payloads or scheduled tasks remain'
+          ]},
+          { name: '5. RECOVERY', actions: [
+            '☐ Restore systems from verified clean backups',
+            '☐ Prioritize recovery by business criticality',
+            '☐ Validate restored data integrity',
+            '☐ Monitor restored systems for reinfection',
+            '☐ Gradually reconnect systems to network',
+            '☐ Implement additional monitoring for 30+ days',
+            '☐ Verify all systems at pre-incident baseline'
+          ]},
+          { name: '6. LESSONS LEARNED', actions: [
+            '☐ Conduct full post-incident review within 2 weeks',
+            '☐ Document root cause and contributing factors',
+            '☐ Update incident response plan based on findings',
+            '☐ Implement additional controls to prevent recurrence',
+            '☐ Update detection rules and alerting thresholds',
+            '☐ Share IOCs with relevant communities (MISP, ISAC)',
+            '☐ File required regulatory notifications'
+          ]}
+        ]
+      },
+      databreach: {
+        name: 'Data Breach',
+        icon: '📂',
+        severity: 'CRITICAL',
+        phases: [
+          { name: '1. PREPARATION', actions: [
+            '☐ Classify data assets by sensitivity level',
+            '☐ Implement DLP (Data Loss Prevention) controls',
+            '☐ Establish data breach notification procedures',
+            '☐ Define legal/regulatory notification requirements',
+            '☐ Maintain encryption for data at rest and in transit',
+            '☐ Establish data inventory and flow mapping'
+          ]},
+          { name: '2. IDENTIFICATION', actions: [
+            '☐ Determine what data was accessed or exfiltrated',
+            '☐ Identify affected individuals (customers, employees)',
+            '☐ Determine breach vector (external, internal, partner)',
+            '☐ Assess scope: number of records, data types',
+            '☐ Check for data appearing on dark web/leak sites',
+            '☐ Determine if PII, financial, health, or credentials affected',
+            '☐ Identify regulatory implications (GDPR, PCI, local laws)'
+          ]},
+          { name: '3. CONTAINMENT', actions: [
+            '🔴 IMMEDIATE: Revoke compromised access credentials',
+            '🔴 IMMEDIATE: Block exfiltration channels',
+            '☐ Isolate affected systems',
+            '☐ Disable compromised accounts and API keys',
+            '☐ Preserve forensic evidence',
+            '☐ Engage legal counsel and breach coach',
+            '☐ Document all containment actions with timestamps'
+          ]},
+          { name: '4. ERADICATION', actions: [
+            '☐ Remove unauthorized access mechanisms',
+            '☐ Patch exploited vulnerabilities',
+            '☐ Close backdoors and unauthorized accounts',
+            '☐ Implement enhanced access controls',
+            '☐ Reset all potentially compromised credentials',
+            '☐ Update API keys and secrets'
+          ]},
+          { name: '5. RECOVERY', actions: [
+            '☐ Restore affected systems from clean backups',
+            '☐ Implement additional monitoring',
+            '☐ Begin affected individual notification process',
+            '☐ Offer credit monitoring / identity protection services',
+            '☐ Set up dedicated breach response communication channel',
+            '☐ Monitor for further data exposure'
+          ]},
+          { name: '6. LESSONS LEARNED', actions: [
+            '☐ Complete regulatory notifications within required timelines',
+            '☐ Conduct root cause analysis',
+            '☐ Update data protection controls',
+            '☐ Revise data classification and handling procedures',
+            '☐ Update DLP rules and monitoring',
+            '☐ Prepare breach notification report for regulators'
+          ]}
+        ]
+      },
+      phishing: {
+        name: 'Phishing Campaign',
+        icon: '🎣',
+        severity: 'HIGH',
+        phases: [
+          { name: '1. PREPARATION', actions: [
+            '☐ Deploy email authentication (SPF, DKIM, DMARC)',
+            '☐ Implement email filtering and sandboxing',
+            '☐ Conduct regular phishing awareness training',
+            '☐ Establish phishing reporting mechanism (button/alias)',
+            '☐ Create phishing response playbook and team'
+          ]},
+          { name: '2. IDENTIFICATION', actions: [
+            '☐ Analyze phishing email headers and body',
+            '☐ Extract IOCs: sender domains, URLs, IPs, attachments',
+            '☐ Determine scope: how many received the email',
+            '☐ Identify who clicked links or submitted credentials',
+            '☐ Determine if attachments were opened (sandbox analysis)',
+            '☐ Check for credential harvesting sites'
+          ]},
+          { name: '3. CONTAINMENT', actions: [
+            '☐ Block sender domain and IP at email gateway',
+            '☐ Block phishing URLs at proxy/DNS level',
+            '☐ Quarantine all copies of phishing email',
+            '☐ Reset credentials for affected users',
+            '☐ Force MFA re-enrollment if applicable',
+            '☐ Block any harvested credential usage'
+          ]},
+          { name: '4. ERADICATION', actions: [
+            '☐ Remove phishing emails from all mailboxes',
+            '☐ Block related infrastructure (lookalike domains)',
+            '☐ Clean any malware dropped by phishing',
+            '☐ Revoke compromised session tokens',
+            '☐ Submit takedown requests for phishing sites'
+          ]},
+          { name: '5. RECOVERY', actions: [
+            '☐ Monitor affected accounts for suspicious activity',
+            '☐ Verify credentials were changed successfully',
+            '☐ Confirm no persistent access from attacker',
+            '☐ Send targeted communication to affected users'
+          ]},
+          { name: '6. LESSONS LEARNED', actions: [
+            '☐ Update email filtering rules',
+            '☐ Add blocked indicators to threat intelligence',
+            '☐ Identify training gaps and schedule refreshers',
+            '☐ Evaluate effectiveness of reporting mechanism',
+            '☐ Share IOCs with industry partners'
+          ]}
+        ]
+      },
+      ddos: {
+        name: 'DDoS Attack',
+        icon: '🌊',
+        severity: 'HIGH',
+        phases: [
+          { name: '1. PREPARATION', actions: [
+            '☐ Deploy DDoS mitigation service (Cloudflare, Akamai)',
+            '☐ Define escalation procedures for availability incidents',
+            '☐ Document critical services and their bandwidth needs',
+            '☐ Test DDoS response plan regularly',
+            '☐ Establish communication with ISP/CDN provider'
+          ]},
+          { name: '2. IDENTIFICATION', actions: [
+            '☐ Identify attack type (volumetric, protocol, application)',
+            '☐ Determine attack volume and sources',
+            '☐ Identify targeted services/assets',
+            '☐ Assess business impact (revenue, reputation)',
+            '☐ Determine if DDoS is a smokescreen for other attack'
+          ]},
+          { name: '3. CONTAINMENT', actions: [
+            '🔴 IMMEDIATE: Activate DDoS mitigation service',
+            '☐ Enable rate limiting on exposed services',
+            '☐ Block known attack source IP ranges',
+            '☐ Contact ISP for upstream filtering',
+            '☐ Switch to geographically distributed endpoints',
+            '☐ Implement challenge-response for suspicious traffic'
+          ]},
+          { name: '4. ERADICATION', actions: [
+            '☐ Work with ISP/CDN to filter attack traffic',
+            '☐ Block botnet C2 channels if identifiable',
+            '☐ Adjust firewall rules for attack patterns',
+            '☐ Coordinate with law enforcement if warranted'
+          ]},
+          { name: '5. RECOVERY', actions: [
+            '☐ Gradually reduce mitigation restrictions',
+            '☐ Verify all services restored to normal operation',
+            '☐ Monitor for attack resurgence',
+            '☐ Communicate resolution to stakeholders'
+          ]},
+          { name: '6. LESSONS LEARNED', actions: [
+            '☐ Review mitigation effectiveness',
+            '☐ Update capacity planning based on attack volume',
+            '☐ Identify and close any security gaps exposed during attack',
+            '☐ Update runbook with lessons learned'
+          ]}
+        ]
+      },
+      insider: {
+        name: 'Insider Threat',
+        icon: '👤',
+        severity: 'HIGH',
+        phases: [
+          { name: '1. PREPARATION', actions: [
+            '☐ Implement principle of least privilege',
+            '☐ Deploy User Behavior Analytics (UBA)',
+            '☐ Establish clear acceptable use policies',
+            '☐ Implement DLP for sensitive data',
+            '☐ Create insider threat reporting mechanism'
+          ]},
+          { name: '2. IDENTIFICATION', actions: [
+            '☐ Identify suspicious behavior patterns',
+            '☐ Determine scope of unauthorized access',
+            '☐ Identify data accessed or exfiltrated',
+            '☐ Determine if malicious or accidental',
+            '☐ Correlate with HR data (terminations, disputes)',
+            '☐ Review access logs and data movement'
+          ]},
+          { name: '3. CONTAINMENT', actions: [
+            '☐ Restrict individual\'s access without tipping off',
+            '☐ Monitor all activity covertly if investigation ongoing',
+            '☐ Preserve evidence for potential legal action',
+            '☐ Coordinate with HR and Legal',
+            '☐ Secure any compromised systems'
+          ]},
+          { name: '4. ERADICATION', actions: [
+            '☐ Revoke all access credentials',
+            '☐ Recover any exfiltrated data if possible',
+            '☐ Close backdoors or unauthorized access',
+            '☐ Address any policy or control gaps exploited'
+          ]},
+          { name: '5. RECOVERY', actions: [
+            '☐ Reassign responsibilities to other personnel',
+            '☐ Implement enhanced monitoring for related accounts',
+            '☐ Restore affected systems to known-good state',
+            '☐ Communicate appropriately (without compromising investigation)'
+          ]},
+          { name: '6. LESSONS LEARNED', actions: [
+            '☐ Review and update access control policies',
+            '☐ Enhance monitoring based on incident patterns',
+            '☐ Update insider threat detection rules',
+            '☐ Consider legal/criminal proceedings',
+            '☐ Brief management on findings'
+          ]}
+        ]
+      },
+      apt: {
+        name: 'APT / Advanced Attack',
+        icon: '🎯',
+        severity: 'CRITICAL',
+        phases: [
+          { name: '1. PREPARATION', actions: [
+            '☐ Deploy advanced threat detection (EDR, NDR, SIEM)',
+            '☐ Establish threat hunting capability',
+            '☐ Develop intelligence on relevant APT groups',
+            '☐ Implement zero-trust architecture principles',
+            '☐ Establish relationships with CERT and intelligence community'
+          ]},
+          { name: '2. IDENTIFICATION', actions: [
+            '☐ Identify attacker TTPs mapped to MITRE ATT&CK',
+            '☐ Determine scope of compromise (patient zero, lateral movement)',
+            '☐ Identify APT group based on TTPs and IOCs',
+            '☐ Determine data and systems accessed',
+            '☐ Assess dwell time and attacker objectives',
+            '☐ Identify C2 infrastructure and communication methods'
+          ]},
+          { name: '3. CONTAINMENT', actions: [
+            '🔴 CRITICAL: Engage incident response retainer firm',
+            '☐ Isolate compromised systems carefully (avoid tipping off attacker)',
+            '☐ Block identified C2 channels',
+            '☐ Implement enhanced monitoring without alerting attacker',
+            '☐ Coordinate with law enforcement/national CERT',
+            '☐ Preserve all evidence for forensic analysis',
+            '☐ Document attacker activity timeline in detail'
+          ]},
+          { name: '4. ERADICATION', actions: [
+            '☐ Remove all attacker persistence mechanisms',
+            '☐ Identify and close initial access vector',
+            '☐ Rebuild compromised systems from scratch',
+            '☐ Reset all credentials (Kerberos, certificates, service accounts)',
+            '☐ Remove all backdoors, web shells, scheduled tasks',
+            '☐ Verify no dormant attacker tools remain'
+          ]},
+          { name: '5. RECOVERY', actions: [
+            '☐ Restore systems with enhanced security controls',
+            '☐ Implement additional detection for identified TTPs',
+            '☐ Extended monitoring period (90+ days)',
+            '☐ Watch for attacker return using different TTPs',
+            '☐ Validate all systems at secure baseline',
+            '☐ Brief executive team and board'
+          ]},
+          { name: '6. LESSONS LEARNED', actions: [
+            '☐ Full incident timeline and root cause report',
+            '☐ Map attacker activity to MITRE ATT&CK framework',
+            '☐ Update detection rules for all identified TTPs',
+            '☐ Enhance security controls based on gaps exploited',
+            '☐ Share (sanitized) intelligence with community',
+            '☐ Update threat model for organization'
+          ]}
+        ]
+      }
+    };
+    
+    // Resolve type
+    let pbKey = incidentType;
+    if (incidentType.includes('ransom')) pbKey = 'ransomware';
+    else if (incidentType.includes('breach') || incidentType.includes('data')) pbKey = 'databreach';
+    else if (incidentType.includes('phish')) pbKey = 'phishing';
+    else if (incidentType.includes('ddos') || incidentType.includes('denial')) pbKey = 'ddos';
+    else if (incidentType.includes('insider')) pbKey = 'insider';
+    else if (incidentType.includes('apt') || incidentType.includes('advanced')) pbKey = 'apt';
+    
+    const pb = playbooks[pbKey] || playbooks.ransomware;
+    
+    let output = `${pb.icon} INCIDENT RESPONSE PLAYBOOK: ${pb.name}\n`;
+    output += `Severity: ${pb.severity} | Framework: NIST SP 800-61\n`;
+    output += '═'.repeat(50) + '\n\n';
+    
+    const phasesToShow = phase === 'all' ? pb.phases : pb.phases.filter(p => p.name.toLowerCase().includes(phase));
+    
+    phasesToShow.forEach(p => {
+      output += `${p.name}\n`;
+      output += '─'.repeat(40) + '\n';
+      p.actions.forEach(a => { output += `  ${a}\n`; });
+      output += '\n';
+    });
+    
+    // Communication templates
+    output += '📞 COMMUNICATION TEMPLATES:\n';
+    output += '─'.repeat(40) + '\n';
+    output += '  Internal: "Security incident detected. Type: [TYPE]. Severity: [LEVEL].\n';
+    output += '  Response team activated. Updates every [X] minutes via [CHANNEL]."\n\n';
+    output += '  External: "We are aware of a security event affecting [SCOPE].\n';
+    output += '  Our team is responding. We will provide updates as available.\n';
+    output += '  Contact: incident@[company].com"\n\n';
+    
+    output += '📋 EVIDENCE COLLECTION CHECKLIST:\n';
+    output += '─'.repeat(40) + '\n';
+    output += '  ☐ Screenshots with timestamps\n';
+    output += '  ☐ System logs (syslog, event logs, application logs)\n';
+    output += '  ☐ Network captures (pcap where available)\n';
+    output += '  ☐ Memory dumps from affected systems\n';
+    output += '  ☐ Disk images (forensic bit-by-bit copies)\n';
+    output += '  ☐ Chain of custody documentation\n';
+    
+    return JSON.stringify({ result: output });
+  } catch (e) {
+    return JSON.stringify({ error: `Playbook generation failed: ${e.message}` });
+  }
+};
+</script>
+</body></html>

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Actions</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f1923; color: #e0e0e0; padding: 20px; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { color: #00d4ff; margin-bottom: 20px; font-size: 1.5em; }
+  h2 { color: #00d4ff; margin: 25px 0 10px; font-size: 1.2em; border-bottom: 1px solid #1e3a4f; padding-bottom: 5px; }
+  h3 { color: #88ccdd; margin: 15px 0 8px; font-size: 1em; }
+  .section { background: #1a2a3a; border-radius: 8px; padding: 16px; margin: 10px 0; border: 1px solid #1e3a4f; }
+  .action-item { background: #0f1923; border-radius: 6px; padding: 12px; margin: 8px 0; border-left: 4px solid #00d4ff; }
+  .action-item .owner { color: #00d4ff; font-weight: 600; }
+  .action-item .deadline { color: #ffc107; font-weight: 600; }
+  .decision { background: #0f1923; border-radius: 6px; padding: 12px; margin: 8px 0; border-left: 4px solid #28a745; }
+  .key-point { background: #0f1923; border-radius: 6px; padding: 12px; margin: 8px 0; border-left: 4px solid #0d6efd; }
+  .open-question { background: #0f1923; border-radius: 6px; padding: 12px; margin: 8px 0; border-left: 4px solid #ffc107; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; font-weight: 600; margin-right: 6px; }
+  .badge-owner { background: #00d4ff22; color: #00d4ff; }
+  .badge-deadline { background: #ffc10722; color: #ffc107; }
+  .badge-priority { background: #dc354522; color: #dc3545; }
+  .meta { color: #6c757d; font-size: 0.85em; margin-bottom: 10px; }
+  .empty { color: #6c757d; font-style: italic; padding: 10px; }
+  #output { margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📋 Meeting Actions Extractor</h1>
+  <div id="output"><p class="meta">Waiting for meeting data...</p></div>
+</div>
+
+<script>
+/**
+ * Meeting Actions — AI Edge Gallery Skill
+ * Extracts action items, decisions, key points, and open questions from meeting notes.
+ * All processing is local using regex patterns — no API calls.
+ */
+
+/**
+ * Extract action items from text using patterns
+ */
+function extractActionItems(text) {
+  const items = [];
+  
+  // Pattern: "ACTION:", "ACTION ITEM:", "TODO:", "TASK:", "Follow-up:"
+  const actionPatterns = [
+    /(?:ACTION\s*(?:ITEM)?|TODO|TASK|FOLLOW[\s-]?UP)\s*:?\s*(.+?)(?:\n|$)/gi,
+    /(?:needs?\s+to|should|must|will|shall|please)\s+(.+?)(?:\n|$)/gi,
+    /(?:assigned\s+to|owner\s*:)?\s*(@?\w+)\s*(?:will|shall|needs?\s+to|should|is\s+going\s+to)\s+(.+?)(?:\n|$)/gi,
+    /(?:by|before|due)\s+(?:the\s+)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?|end\s+of\s+\w+|next\s+\w+|tomorrow|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/gi
+  ];
+
+  // Extract explicit action lines
+  const actionLineRegex = /(?:^|\n)\s*(?:ACTION\s*(?:ITEM)?|TODO|TASK|FOLLOW[\s-]?UP)\s*:?\s*(.+?)(?:\n|$)/gi;
+  let match;
+  while ((match = actionLineRegex.exec(text)) !== null) {
+    const line = match[1].trim();
+    if (line.length > 3) {
+      items.push(parseActionLine(line));
+    }
+  }
+
+  // Extract lines with owner + action patterns
+  const ownerActionRegex = /(?:^|\n)\s*[-•*]\s*(@?\w+(?:\s+\w+)?)\s*[-–—:]\s*(.+?)(?:\n|$)/gi;
+  while ((match = ownerActionRegex.exec(text)) !== null) {
+    const owner = match[1].trim();
+    const task = match[2].trim();
+    if (task.length > 5 && !owner.match(/^(the|this|that|it|we|our|they|their)/i)) {
+      items.push({ task, owner: owner.replace('@', ''), deadline: null });
+    }
+  }
+
+  // If no explicit actions found, look for sentences with action verbs + deadlines
+  if (items.length === 0) {
+    const sentences = text.split(/[.!?\n]+/);
+    const deadlineRegex = /\b(by|before|due\s+(?:on|by)?)\s+(?:the\s+)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?|\w+\s+\d{1,2}(?:st|nd|rd|th)?|end\s+of\s+\w+|next\s+\w+|tomorrow|EOW|EO[MWY])/i;
+    const actionVerbRegex = /\b(complete|finish|submit|send|review|update|create|prepare|schedule|follow\s*up|check|confirm|organize|draft|implement|test|deploy|fix|resolve)\b/i;
+
+    sentences.forEach(s => {
+      s = s.trim();
+      if (s.length < 10) return;
+      const hasDeadline = deadlineRegex.test(s);
+      const hasActionVerb = actionVerbRegex.test(s);
+      if (hasDeadline || hasActionVerb) {
+        const deadlineMatch = s.match(deadlineRegex);
+        const ownerMatch = s.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:will|should|needs?\s+to|is\s+going\s+to)/);
+        items.push({
+          task: s,
+          owner: ownerMatch ? ownerMatch[1] : null,
+          deadline: deadlineMatch ? deadlineMatch[2] : null
+        });
+      }
+    });
+  }
+
+  return items;
+}
+
+/**
+ * Parse a single action line for owner and deadline
+ */
+function parseActionLine(line) {
+  let owner = null;
+  let deadline = null;
+  let task = line;
+
+  // Extract owner: "John - do X" or "(@John) do X"
+  const ownerMatch = line.match(/(?:^|\s)(@?\w+(?:\s+\w+)?)\s*[-–—:]\s*(.+)/);
+  if (ownerMatch) {
+    owner = ownerMatch[1].replace('@', '');
+    task = ownerMatch[2];
+  }
+
+  // Extract deadline: "by Friday", "due 12/15", "before EOW"
+  const deadlineMatch = task.match(/\b(?:by|before|due)\s+(?:the\s+)?(.+?)(?:\.|,|$)/i);
+  if (deadlineMatch) {
+    deadline = deadlineMatch[1].trim();
+    task = task.replace(deadlineMatch[0], '').trim();
+  }
+
+  return { task, owner, deadline };
+}
+
+/**
+ * Extract decisions from text
+ */
+function extractDecisions(text) {
+  const decisions = [];
+  const patterns = [
+    /(?:DECISION|DECIDED|AGREED)\s*:?\s*(.+?)(?:\n|$)/gi,
+    /(?:we\s+(?:have\s+)?(?:decided|agreed)\s+(?:to|that|on)\s+)(.+?)(?:\n|$)/gi,
+    /(?:consensus\s+(?:is|was)\s+(?:to|that)\s+)(.+?)(?:\n|$)/gi,
+    /(?:approved|confirmed)\s*:?\s*(.+?)(?:\n|$)/gi
+  ];
+
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const d = match[1] ? match[1].trim() : match[0].trim();
+      if (d.length > 3 && !decisions.includes(d)) {
+        decisions.push(d);
+      }
+    }
+  });
+
+  return decisions;
+}
+
+/**
+ * Extract key discussion points
+ */
+function extractKeyPoints(text) {
+  const points = [];
+  
+  // Look for bullet points or numbered items
+  const bulletRegex = /(?:^|\n)\s*(?:[-•*]\s*|\d+[.)]\s*)(.+?)(?:\n|$)/g;
+  let match;
+  while ((match = bulletRegex.exec(text)) !== null) {
+    const p = match[1].trim();
+    if (p.length > 10 && !p.match(/^(ACTION|TODO|DECISION|DECIDED)/i)) {
+      points.push(p);
+    }
+  }
+
+  // If no bullets found, extract sentences with topic keywords
+  if (points.length === 0) {
+    const topicRegex = /\b(discussed|presented|reviewed|covered|talked\s+about|went\s+over|topic|agenda\s*item)\b\s*:?\s*(.+?)(?:\n|$)/gi;
+    while ((match = topicRegex.exec(text)) !== null) {
+      const p = match[2] ? match[2].trim() : match[0].trim();
+      if (p.length > 5) points.push(p);
+    }
+  }
+
+  return points.slice(0, 15); // Limit to 15 points
+}
+
+/**
+ * Extract open questions / parking lot items
+ */
+function extractOpenQuestions(text) {
+  const questions = [];
+  const patterns = [
+    /(?:QUESTION|OPEN\s*ITEM|PARKING\s*LOT|BLOCKER|BLOCKING)\s*:?\s*(.+?)(?:\n|$)/gi,
+    /(?:^|\n)\s*\?\s*(.+?)(?:\n|$)/g,
+    /(?:who|what|when|where|why|how)\s+\w+\s+\w+.*\?/gi
+  ];
+
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const q = (match[1] || match[0]).trim().replace(/^\?\s*/, '');
+      if (q.length > 5 && !questions.some(existing => existing.toLowerCase() === q.toLowerCase())) {
+        questions.push(q);
+      }
+    }
+  });
+
+  return questions.slice(0, 10);
+}
+
+/**
+ * Build the formatted output HTML
+ */
+function buildOutput(data, extracted) {
+  const meta = data.metadata || {};
+  let html = '';
+
+  // Header
+  html += '<div class="section">';
+  html += `<h2>📝 Meeting Summary</h2>`;
+  if (meta.title || data.title) html += `<p><strong>Title:</strong> ${escapeHtml(meta.title || data.title || 'Untitled Meeting')}</p>`;
+  if (meta.date || data.date) html += `<p><strong>Date:</strong> ${escapeHtml(meta.date || data.date)}</p>`;
+  html += '</div>';
+
+  // Action Items
+  html += '<h2>✅ Action Items</h2>';
+  if (extracted.actions.length === 0) {
+    html += '<div class="section"><p class="empty">No explicit action items detected.</p></div>';
+  } else {
+    extracted.actions.forEach((a, i) => {
+      html += `<div class="action-item">
+        <strong>${i + 1}.</strong> ${escapeHtml(a.task)}`;
+      if (a.owner) html += ` <span class="badge badge-owner">👤 ${escapeHtml(a.owner)}</span>`;
+      if (a.deadline) html += ` <span class="badge badge-deadline">📅 ${escapeHtml(a.deadline)}</span>`;
+      html += '</div>';
+    });
+  }
+
+  // Decisions
+  html += '<h2>✌️ Decisions Made</h2>';
+  if (extracted.decisions.length === 0) {
+    html += '<div class="section"><p class="empty">No explicit decisions detected.</p></div>';
+  } else {
+    extracted.decisions.forEach((d, i) => {
+      html += `<div class="decision"><strong>${i + 1}.</strong> ${escapeHtml(d)}</div>`;
+    });
+  }
+
+  // Key Discussion Points
+  html += '<h2>💬 Key Discussion Points</h2>';
+  if (extracted.keyPoints.length === 0) {
+    html += '<div class="section"><p class="empty">No key points extracted.</p></div>';
+  } else {
+    extracted.keyPoints.forEach((p, i) => {
+      html += `<div class="key-point"><strong>${i + 1}.</strong> ${escapeHtml(p)}</div>`;
+    });
+  }
+
+  // Open Questions / Parking Lot
+  html += '<h2>❓ Open Questions / Parking Lot</h2>';
+  if (extracted.openQuestions.length === 0) {
+    html += '<div class="section"><p class="empty">No open questions detected.</p></div>';
+  } else {
+    extracted.openQuestions.forEach((q, i) => {
+      html += `<div class="open-question"><strong>${i + 1}.</strong> ${escapeHtml(q)}</div>`;
+    });
+  }
+
+  return html;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text || '';
+  return div.innerHTML;
+}
+
+/**
+ * AI Edge Gallery entry point.
+ * Receives meeting data from the LLM and returns structured summary.
+ * @param {Object} data - Input with { text, title?, date?, metadata? }
+ * @returns {string} JSON.stringify({ result: "..." }) with formatted summary
+ */
+window['ai_edge_gallery_get_result'] = async (data) => {
+  try {
+    if (typeof data === 'string') {
+      data = JSON.parse(data);
+    }
+
+    const text = data.text || data.transcript || data.notes || '';
+    if (!text) {
+      const errMsg = 'No meeting text provided. Please provide meeting notes or transcript.';
+      document.getElementById('output').innerHTML = `<div class="section"><p style="color:#dc3545;">${errMsg}</p></div>`;
+      return JSON.stringify({ result: errMsg });
+    }
+
+    // Extract all categories
+    const extracted = {
+      actions: extractActionItems(text),
+      decisions: extractDecisions(text),
+      keyPoints: extractKeyPoints(text),
+      openQuestions: extractOpenQuestions(text)
+    };
+
+    // Build formatted HTML
+    const html = buildOutput(data, extracted);
+
+    // Build structured JSON result
+    const jsonResult = {
+      summary: {
+        totalActions: extracted.actions.length,
+        totalDecisions: extracted.decisions.length,
+        totalKeyPoints: extracted.keyPoints.length,
+        totalOpenQuestions: extracted.openQuestions.length
+      },
+      actions: extracted.actions,
+      decisions: extracted.decisions,
+      keyPoints: extracted.keyPoints,
+      openQuestions: extracted.openQuestions
+    };
+
+    // Render preview
+    document.getElementById('output').innerHTML = html;
+
+    // Return both the HTML and the structured JSON
+    return JSON.stringify({ 
+      result: html,
+      data: jsonResult
+    });
+
+  } catch (error) {
+    const errorMsg = `Error processing meeting data: ${error.message}`;
+    document.getElementById('output').innerHTML = `<div class="section" style="color:#dc3545;">${escapeHtml(errorMsg)}</div>`;
+    return JSON.stringify({ result: errorMsg });
+  }
+};
+
+// Auto-detect data
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.__ai_edge_data) {
+    window['ai_edge_gallery_get_result'](window.__ai_edge_data);
+  }
+});
+</script>
+</body>
+</html>

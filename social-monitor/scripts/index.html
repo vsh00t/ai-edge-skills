@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Social Monitor</title></head><body>
+<script>
+window['ai_edge_gallery_get_result'] = async (data) => {
+  try {
+    const input = JSON.parse(data);
+    const texts = input.texts || input.posts || [];
+    const textArray = Array.isArray(texts) ? texts : [input.text || input.content || String(data)];
+    const keywords = (input.keywords || input.track || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+    
+    if (textArray.length === 0 || (textArray.length === 1 && !textArray[0])) {
+      return JSON.stringify({ error: 'Provide social media texts to analyze. JSON format: { "texts": ["post1", "post2"], "keywords": "brand,company" }' });
+    }
+    
+    const analysis = { total: textArray.length, sentiment: { positive: 0, negative: 0, neutral: 0 }, threats: [], disinfo: [], keywordMatches: {}, avgThreatScore: 0 };
+    
+    // Sentiment word lists
+    const positiveWords = ['good','great','excellent','happy','love','best','amazing','wonderful','fantastic','awesome','thanks','helpful','safe','secure','protect','success','win','improve','trust','reliable'];
+    const negativeWords = ['bad','terrible','awful','hate','worst','angry','danger','risk','threat','attack','hack','breach','vulnerability','exploit','malware','phishing','scam','fraud','leak','exposed','stolen','compromised'];
+    const threatWords = ['kill','bomb','attack','shoot','destroy','hack','breach','exploit','ransomware','ddos','inject','malware','trojan','backdoor','rootkit','steal','deface','wipe','dos','brute'];
+    const disinfoPatterns = [
+      { pattern: /\b(they don't want you to know|mainstream media won't tell|they're hiding)\b/i, type: 'Suppressed Information' },
+      { pattern: /\b(wake up|sheeple|do your own research)\b/i, type: 'Anti-Establishment Narrative' },
+      { pattern: /\b(urgent|emergency|act now|before it's too late)\b/i, type: 'Urgency Manipulation' },
+      { pattern: /\b(100%|guaranteed|proven|undeniable)\b/i, type: 'False Certainty' },
+      { pattern: /\b(soros|rothschild|deep state|new world order|nwo)\b/i, type: 'Conspiracy Theory' },
+      { pattern: /\b(fake news|hoax|plandemic|scamdemic)\b/i, type: 'Reality Denial' },
+      { pattern: /\b(genocide|ethnic cleansing|purge)\b/i, type: 'Escalated Language' },
+      { pattern: /\b(we must|join us|take action|rise up)\b/i, type: 'Mobilization Call' }
+    ];
+    
+    let totalThreatScore = 0;
+    
+    textArray.forEach((text, idx) => {
+      const lower = text.toLowerCase();
+      const words = lower.split(/\s+/);
+      
+      // Sentiment
+      let posCount = 0, negCount = 0;
+      words.forEach(w => {
+        if (positiveWords.some(pw => w.includes(pw))) posCount++;
+        if (negativeWords.some(nw => w.includes(nw))) negCount++;
+      });
+      
+      if (posCount > negCount * 2) analysis.sentiment.positive++;
+      else if (negCount > posCount * 2) analysis.sentiment.negative++;
+      else analysis.sentiment.neutral++;
+      
+      // Threat detection
+      let threatScore = 0;
+      const foundThreats = [];
+      threatWords.forEach(tw => {
+        if (lower.includes(tw)) { threatScore += 15; foundThreats.push(tw); }
+      });
+      
+      if (threatScore > 0) {
+        analysis.threats.push({ index: idx + 1, text: text.substring(0, 100), score: Math.min(threatScore, 100), indicators: foundThreats });
+      }
+      totalThreatScore += Math.min(threatScore, 100);
+      
+      // Disinformation patterns
+      disinfoPatterns.forEach(dp => {
+        if (dp.pattern.test(text)) {
+          analysis.disinfo.push({ index: idx + 1, type: dp.type, text: text.substring(0, 80) });
+        }
+      });
+      
+      // Keyword tracking
+      keywords.forEach(kw => {
+        if (lower.includes(kw)) {
+          analysis.keywordMatches[kw] = (analysis.keywordMatches[kw] || 0) + 1;
+        }
+      });
+    });
+    
+    analysis.avgThreatScore = Math.round(totalThreatScore / textArray.length);
+    
+    // Format output
+    let output = `📊 SOCIAL MEDIA THREAT ANALYSIS\n`;
+    output += '═'.repeat(45) + '\n\n';
+    output += `Total posts analyzed: ${analysis.total}\n\n`;
+    
+    // Sentiment
+    output += '💬 SENTIMENT BREAKDOWN:\n';
+    output += '─'.repeat(30) + '\n';
+    const pPct = ((analysis.sentiment.positive / analysis.total) * 100).toFixed(1);
+    const nPct = ((analysis.sentiment.negative / analysis.total) * 100).toFixed(1);
+    const neuPct = ((analysis.sentiment.neutral / analysis.total) * 100).toFixed(1);
+    output += `  🟢 Positive: ${analysis.sentiment.positive} (${pPct}%)\n`;
+    output += `  🔴 Negative: ${analysis.sentiment.negative} (${nPct}%)\n`;
+    output += `  ⚪ Neutral:  ${analysis.sentiment.neutral} (${neuPct}%)\n`;
+    output += `  📈 Average Threat Score: ${analysis.avgThreatScore}/100\n`;
+    
+    // Threats
+    if (analysis.threats.length > 0) {
+      output += `\n🚨 THREATS DETECTED (${analysis.threats.length}):\n`;
+      output += '─'.repeat(30) + '\n';
+      analysis.threats.slice(0, 10).forEach(t => {
+        output += `  [#${t.index}] Score: ${t.score}/100 | Keywords: ${t.indicators.join(', ')}\n`;
+        output += `    "${t.text}${t.text.length >= 100 ? '...' : ''}"\n`;
+      });
+    }
+    
+    // Disinfo
+    if (analysis.disinfo.length > 0) {
+      output += `\n⚠️ DISINFORMATION INDICATORS (${analysis.disinfo.length}):\n`;
+      output += '─'.repeat(30) + '\n';
+      const byType = {};
+      analysis.disinfo.forEach(d => { byType[d.type] = (byType[d.type] || 0) + 1; });
+      for (const [type, count] of Object.entries(byType)) {
+        output += `  • ${type}: ${count} occurrence(s)\n`;
+      }
+    }
+    
+    // Keyword tracking
+    if (keywords.length > 0) {
+      output += `\n🔑 KEYWORD TRACKING:\n`;
+      output += '─'.repeat(30) + '\n';
+      keywords.forEach(kw => {
+        const count = analysis.keywordMatches[kw] || 0;
+        const pct = ((count / analysis.total) * 100).toFixed(1);
+        output += `  "${kw}": ${count} mentions (${pct}%)\n`;
+      });
+    }
+    
+    // Summary assessment
+    output += '\n📋 ASSESSMENT:\n';
+    output += '─'.repeat(30) + '\n';
+    if (analysis.avgThreatScore > 60) output += '  🔴 HIGH THREAT LEVEL — Immediate review recommended\n';
+    else if (analysis.avgThreatScore > 30) output += '  🟡 MODERATE THREAT LEVEL — Monitor closely\n';
+    else output += '  🟢 LOW THREAT LEVEL — Continue monitoring\n';
+    
+    if (analysis.disinfo.length > analysis.total * 0.3) output += '  ⚠️ High disinformation density detected\n';
+    if (analysis.sentiment.negative > analysis.total * 0.5) output += '  ⚠️ Predominantly negative sentiment\n';
+    
+    return JSON.stringify({ result: output });
+  } catch (e) {
+    return JSON.stringify({ error: `Analysis failed: ${e.message}` });
+  }
+};
+</script>
+</body></html>
