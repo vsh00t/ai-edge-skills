@@ -1,5 +1,8 @@
-name	social-monitor
-description	Social media threat and sentiment monitor. Analyzes text snippets from social media for threats, sentiment, disinformation indicators, and key narrative tracking.
+---
+name: social-monitor
+description: Social media threat and sentiment monitor. Analyzes text snippets from social media for threats, sentiment, disinformation indicators, and key narrative tracking.
+---
+
 # Social Monitor Skill
 
 ## Overview

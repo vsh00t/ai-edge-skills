@@ -1,5 +1,8 @@
-name	ioc-parser
-description	Parse and enrich Indicators of Compromise (IOCs) from text, logs, or alerts. Extracts IPs, domains, URLs, hashes, emails, CVEs and provides threat intelligence.
+---
+name: ioc-parser
+description: Parse and enrich Indicators of Compromise (IOCs) from text, logs, or alerts. Extracts IPs, domains, URLs, hashes, emails, CVEs and provides threat intelligence.
+---
+
 # IOC Parser
 
 Extracts and categorizes Indicators of Compromise (IOCs) from raw text, logs, or security alerts. Supports enrichment via the VirusTotal API.

@@ -1,5 +1,8 @@
-name	sast-reviewer
-description	Static Application Security Testing (SAST) code reviewer. Analyzes code snippets for security vulnerabilities following OWASP Top 10. Supports Java/Spring, Python, JavaScript.
+---
+name: sast-reviewer
+description: Static Application Security Testing (SAST) code reviewer. Analyzes code snippets for security vulnerabilities following OWASP Top 10. Supports Java/Spring, Python, JavaScript.
+---
+
 # SAST Code Reviewer
 
 Static Application Security Testing tool that analyzes code snippets for security vulnerabilities aligned with the OWASP Top 10. Supports Java/Spring, Python, and JavaScript.

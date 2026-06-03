@@ -1,5 +1,8 @@
-name	report-generator
-description	Generate professional cybersecurity pentest and audit reports. Structures findings with severity ratings, observations, and recommendations in HTML format.
+---
+name: report-generator
+description: Generate professional cybersecurity pentest and audit reports. Structures findings with severity ratings, observations, and recommendations in HTML format.
+---
+
 # Report Generator Skill
 
 ## Overview

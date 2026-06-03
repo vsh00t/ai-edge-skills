@@ -1,5 +1,8 @@
-name	meeting-actions
-description	Extract action items, decisions, and key points from meeting notes or transcripts. Generates structured summaries with owners and deadlines.
+---
+name: meeting-actions
+description: Extract action items, decisions, and key points from meeting notes or transcripts. Generates structured summaries with owners and deadlines.
+---
+
 # Meeting Actions Skill
 
 ## Overview

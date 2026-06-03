@@ -1,5 +1,8 @@
-name	phishing-analyzer
-description	Analyze suspicious emails for phishing indicators. Parses email headers, extracts URLs, checks sender reputation, and provides a risk score.
+---
+name: phishing-analyzer
+description: Analyze suspicious emails for phishing indicators. Parses email headers, extracts URLs, checks sender reputation, and provides a risk score.
+---
+
 # Phishing Analyzer
 
 Analyzes suspicious emails for phishing indicators by parsing headers, extracting and examining URLs, checking for social engineering techniques, and computing a risk score.

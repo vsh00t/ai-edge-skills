@@ -1,5 +1,8 @@
-name	subnet-calc
-description	Network subnet calculator for IP planning and pentest reconnaissance. Calculates network ranges, generates nmap scan commands, and visualizes subnet divisions.
+---
+name: subnet-calc
+description: Network subnet calculator for IP planning and pentest reconnaissance. Calculates network ranges, generates nmap scan commands, and visualizes subnet divisions.
+---
+
 # Subnet Calculator
 
 Network subnet calculator for IP planning and pentest reconnaissance. Computes network details from CIDR notation, generates ready-to-use nmap commands, and supports VLSM subnetting.

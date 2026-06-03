@@ -1,5 +1,8 @@
-name	incident-response
-description	Interactive incident response playbook generator. Provides step-by-step response procedures for ransomware, data breach, phishing, DDoS, insider threat, and APT incidents based on NIST SP 800-61.
+---
+name: incident-response
+description: Interactive incident response playbook generator. Provides step-by-step response procedures for ransomware, data breach, phishing, DDoS, insider threat, and APT incidents based on NIST SP 800-61.
+---
+
 # Incident Response Skill
 
 ## Overview
